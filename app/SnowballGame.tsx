@@ -10,11 +10,13 @@ import {
   useRef,
   useState,
 } from "react";
+import { WORD_BOOKS, WORD_BOOK_OPTIONS, type WordbookId } from "./wordbooks";
 
 type Team = "pine" | "berry";
 type Stage = "lobby" | "countdown" | "playing" | "paused" | "ended";
 type AiLevel = "rookie" | "steady" | "expert";
 type PlayerRole = "tank" | "balanced" | "striker";
+type SnowfallLevel = "light" | "classic" | "blizzard";
 
 type Player = {
   id: string;
@@ -105,55 +107,6 @@ type ManagedTimer = {
   callback: () => void;
 };
 
-const WORDS = [
-  "snow",
-  "coat",
-  "warm",
-  "tree",
-  "star",
-  "game",
-  "moon",
-  "river",
-  "cocoa",
-  "skate",
-  "scarf",
-  "glove",
-  "winter",
-  "frozen",
-  "silver",
-  "forest",
-  "friend",
-  "school",
-  "holiday",
-  "blizzard",
-  "mittens",
-  "snowman",
-  "sledding",
-  "sparkle",
-  "crystal",
-  "powder",
-  "icicle",
-  "penguin",
-  "mountain",
-  "fireplace",
-  "blanket",
-  "marshmallow",
-  "evergreen",
-  "snowflake",
-  "wonderland",
-  "cabin",
-  "boots",
-  "chilly",
-  "flurry",
-  "glacier",
-  "huddle",
-  "lantern",
-  "shiver",
-  "snowball",
-  "weather",
-  "whiteout",
-];
-
 const AI_LEVELS: Record<
   AiLevel,
   {
@@ -180,6 +133,47 @@ const AI_LEVELS: Record<
     short: "快",
     reaction: [650, 1150],
     charMs: [230, 340],
+  },
+};
+
+const SNOWFALL_PROFILES: Record<
+  SnowfallLevel,
+  {
+    label: string;
+    short: string;
+    interval: [number, number];
+    wordBonus: number;
+    minimumWords: number;
+    maximumWords: number;
+    initialWords: number;
+  }
+> = {
+  light: {
+    label: "舒缓",
+    short: "小雪",
+    interval: [1400, 1900],
+    wordBonus: 3,
+    minimumWords: 5,
+    maximumWords: 9,
+    initialWords: 3,
+  },
+  classic: {
+    label: "标准",
+    short: "标准雪",
+    interval: [850, 1250],
+    wordBonus: 5,
+    minimumWords: 7,
+    maximumWords: 12,
+    initialWords: 5,
+  },
+  blizzard: {
+    label: "暴雪",
+    short: "暴雪",
+    interval: [520, 780],
+    wordBonus: 7,
+    minimumWords: 9,
+    maximumWords: 14,
+    initialWords: 7,
   },
 };
 
@@ -299,10 +293,38 @@ function randomBetween([minimum, maximum]: [number, number]) {
   return minimum + Math.random() * (maximum - minimum);
 }
 
+function shuffleWords(words: readonly string[]) {
+  const shuffled = [...words];
+  for (let index = shuffled.length - 1; index > 0; index -= 1) {
+    const swapIndex = Math.floor(Math.random() * (index + 1));
+    [shuffled[index], shuffled[swapIndex]] = [shuffled[swapIndex], shuffled[index]];
+  }
+  return shuffled;
+}
+
+function hasPrefixCollision(candidate: string, activeWords: Set<string>) {
+  return [...activeWords].some(
+    (activeWord) => candidate.startsWith(activeWord) || activeWord.startsWith(candidate),
+  );
+}
+
 function formatClock(seconds: number) {
   const minutes = Math.floor(seconds / 60).toString().padStart(2, "0");
   const rest = (seconds % 60).toString().padStart(2, "0");
   return `${minutes}:${rest}`;
+}
+
+function calculateWordDamage(length: number) {
+  if (length <= 5) return 10;
+  if (length <= 8) return 11;
+  if (length <= 11) return 12;
+  return 13;
+}
+
+function createSpawnDelay(interval: [number, number], playerScale: number) {
+  const weatherRoll = Math.random();
+  const flurryScale = weatherRoll < 0.18 ? 0.58 : weatherRoll > 0.9 ? 1.45 : 1;
+  return Math.round(randomBetween(interval) * playerScale * flurryScale);
 }
 
 function createInitialPlayers(pineCount = 3, berryCount = 3): Player[] {
@@ -528,6 +550,8 @@ function TeamHealthRows({
 export default function SnowballGame() {
   const [stage, setStage] = useState<Stage>("lobby");
   const [playerName, setPlayerName] = useState("小雪球");
+  const [wordbookId, setWordbookId] = useState<WordbookId>("winter");
+  const [snowfallLevel, setSnowfallLevel] = useState<SnowfallLevel>("classic");
   const [players, setPlayers] = useState<Player[]>(() => createInitialPlayers());
   const [words, setWords] = useState<SnowWord[]>([]);
   const [projectiles, setProjectiles] = useState<Projectile[]>([]);
@@ -535,6 +559,7 @@ export default function SnowballGame() {
   const [characterActions, setCharacterActions] =
     useState<Record<string, CharacterAction>>(createIdleActions);
   const [typed, setTyped] = useState("");
+  const [targetWordId, setTargetWordId] = useState<number | null>(null);
   const [combo, setCombo] = useState(0);
   const [bestCombo, setBestCombo] = useState(0);
   const [correctKeys, setCorrectKeys] = useState(0);
@@ -553,6 +578,10 @@ export default function SnowballGame() {
   const wordsRef = useRef<SnowWord[]>([]);
   const playersRef = useRef<Player[]>(players);
   const typedRef = useRef("");
+  const targetWordIdRef = useRef<number | null>(null);
+  const wordBagRef = useRef<string[]>([]);
+  const wordBagBookIdRef = useRef<WordbookId | null>(null);
+  const recentWordsRef = useRef<string[]>([]);
   const comboRef = useRef(0);
   const lastClaimRef = useRef(0);
   const gameStartedAtRef = useRef(0);
@@ -583,16 +612,39 @@ export default function SnowballGame() {
   const berryFrontlineId = getFrontlineId(activePlayers, "berry");
   const user = activePlayers.find((player) => player.isUser);
   const userAlive = Boolean(user && user.health > 0);
+  const selectedWordbook = WORD_BOOKS[wordbookId];
+  const snowfallProfile = SNOWFALL_PROFILES[snowfallLevel];
   const totalKeys = correctKeys + wrongKeys;
   const accuracy = totalKeys ? Math.round((correctKeys / totalKeys) * 100) : 100;
-  const matchingWords = typed ? words.filter((word) => word.text.startsWith(typed)) : [];
-  const focusedWordId = matchingWords.length === 1 ? matchingWords[0].id : null;
-  const spawnEvery = clamp(1450 - activePlayers.length * 95, 720, 1200);
-  const maxWords = clamp(activePlayers.length + 5, 7, 12);
+  const lockedTarget = targetWordId === null
+    ? null
+    : words.find((word) => word.id === targetWordId) ?? null;
+  const matchingWords = typed
+    ? lockedTarget?.text.startsWith(typed)
+      ? [lockedTarget]
+      : words.filter((word) => word.text.startsWith(typed))
+    : [];
+  const focusedWordId = targetWordId ?? (matchingWords.length === 1 ? matchingWords[0].id : null);
+  const spawnPlayerScale = clamp(1 - (activePlayers.length - 2) * 0.035, 0.82, 1);
+  const maxWords = clamp(
+    activePlayers.length + snowfallProfile.wordBonus,
+    snowfallProfile.minimumWords,
+    snowfallProfile.maximumWords,
+  );
 
   const setGameStage = useCallback((nextStage: Stage) => {
     stageRef.current = nextStage;
     setStage(nextStage);
+  }, []);
+
+  const lockTargetWord = useCallback((wordId: number | null) => {
+    targetWordIdRef.current = wordId;
+    setTargetWordId(wordId);
+  }, []);
+
+  const clearTargetWord = useCallback(() => {
+    targetWordIdRef.current = null;
+    setTargetWordId(null);
   }, []);
 
   const scheduleTimer = useCallback((callback: () => void, delay: number) => {
@@ -769,15 +821,23 @@ export default function SnowballGame() {
     });
   };
 
+  const changeWordbook = (nextWordbookId: WordbookId) => {
+    setWordbookId(nextWordbookId);
+    wordBagBookIdRef.current = nextWordbookId;
+    wordBagRef.current = shuffleWords(WORD_BOOKS[nextWordbookId].words);
+    recentWordsRef.current = [];
+  };
+
   const endMatch = useCallback(
     (winningTeam: Team) => {
       setWinner(winningTeam);
       typedRef.current = "";
       setTyped("");
+      clearTargetWord();
       setGameStage("ended");
       setAnnouncement(winningTeam === "pine" ? "雪松队守住了河岸！" : "红莓队突破了防线！");
     },
-    [setGameStage],
+    [clearTargetWord, setGameStage],
   );
 
   const registerClaim = useCallback((playerId: string) => {
@@ -804,6 +864,7 @@ export default function SnowballGame() {
       if (target.isUser && target.health - actualDamage <= 0) {
         typedRef.current = "";
         setTyped("");
+        clearTargetWord();
       }
       say(`${target.name} 承受 ${actualDamage} 点伤害${target.health - actualDamage <= 0 ? "，出局！" : ""}`);
       const survivors = next.filter(
@@ -811,7 +872,7 @@ export default function SnowballGame() {
       );
       if (!survivors.length) endMatch(target.team === "pine" ? "berry" : "pine");
     },
-    [endMatch, say],
+    [clearTargetWord, endMatch, say],
   );
 
   const launchSnowball = useCallback(
@@ -903,6 +964,7 @@ export default function SnowballGame() {
         setProjectiles((current) => [...current, projectile]);
         scheduleTimer(() => {
           setProjectiles((current) => current.filter((item) => item.id !== projectileId));
+          if (stageRef.current === "ended") return;
           const currentTarget = playersRef.current.find((candidate) => candidate.id === target.id);
           if (!currentTarget || currentTarget.health <= 0) {
             say(`${word.text} 落在了空雪地上`);
@@ -933,22 +995,25 @@ export default function SnowballGame() {
       wordsRef.current = nextWords;
       setWords(nextWords);
 
-      let damage = clamp(5 + word.text.length, 8, 15);
+      let damage = calculateWordDamage(word.text.length);
       if (player.isUser) {
+        clearTargetWord();
         const now = Date.now();
         const nextCombo = now - lastClaimRef.current < 4200 ? comboRef.current + 1 : 1;
         comboRef.current = nextCombo;
         lastClaimRef.current = now;
         setCombo(nextCombo);
         setBestCombo((current) => Math.max(current, nextCombo));
-        damage = clamp(damage + Math.floor(nextCombo / 3), 8, 18);
+        damage = clamp(damage + Math.min(2, Math.floor(nextCombo / 5)), 10, 15);
         say(`${word.text} — 你最快！连击 ×${nextCombo}`);
       } else {
         const currentTyped = typedRef.current;
+        const targetWasStolen = targetWordIdRef.current === word.id;
         const stillMatches = currentTyped && nextWords.some((item) => item.text.startsWith(currentTyped));
-        if (currentTyped && word.text.startsWith(currentTyped) && !stillMatches) {
+        if (targetWasStolen || (currentTyped && word.text.startsWith(currentTyped) && !stillMatches)) {
           typedRef.current = "";
           setTyped("");
+          clearTargetWord();
         }
         say(`${player.name} 抢走了 ${word.text}`);
       }
@@ -956,20 +1021,36 @@ export default function SnowballGame() {
       registerClaim(player.id);
       launchSnowball(player, word, damage);
     },
-    [launchSnowball, registerClaim, say],
+    [clearTargetWord, launchSnowball, registerClaim, say],
   );
 
   const spawnWord = useCallback(
     (seedY?: number) => {
       if (wordsRef.current.length >= maxWords) return;
       const active = new Set(wordsRef.current.map((word) => word.text));
-      const available = WORDS.filter((word) => !active.has(word));
+      if (wordBagBookIdRef.current !== wordbookId) {
+        wordBagBookIdRef.current = wordbookId;
+        wordBagRef.current = shuffleWords(selectedWordbook.words);
+        recentWordsRef.current = [];
+      }
+      if (!wordBagRef.current.length) {
+        const recent = new Set(recentWordsRef.current);
+        const freshPool = selectedWordbook.words.filter((word) => !recent.has(word));
+        wordBagRef.current = shuffleWords(freshPool.length ? freshPool : selectedWordbook.words);
+      }
+      const recent = new Set(recentWordsRef.current);
+      const candidateIndex = wordBagRef.current.findIndex(
+        (word) => !active.has(word) && !recent.has(word) && !hasPrefixCollision(word, active),
+      );
+      if (candidateIndex < 0) return;
       const bots = playersRef.current.filter(
         (player) => player.active && !player.isUser && player.health > 0,
       );
-      if (!available.length || !bots.length) return;
+      if (!bots.length) return;
       const bot = bots[Math.floor(Math.random() * bots.length)];
-      const text = available[Math.floor(Math.random() * available.length)];
+      const [text] = wordBagRef.current.splice(candidateIndex, 1);
+      const historySize = clamp(Math.round(selectedWordbook.words.length * 0.2), 16, 48);
+      recentWordsRef.current = [...recentWordsRef.current, text].slice(-historySize);
       const bornAt = Date.now();
       const timing = createAiTiming(bot, text, bornAt);
       const id = ++sequenceRef.current;
@@ -992,7 +1073,7 @@ export default function SnowballGame() {
       wordsRef.current = next;
       setWords(next);
     },
-    [maxWords],
+    [maxWords, selectedWordbook.words, wordbookId],
   );
 
   const reassignWordAi = useCallback((wordId: number) => {
@@ -1037,6 +1118,11 @@ export default function SnowballGame() {
     setCharacterActions(createIdleActions());
     actorAvailableAtRef.current = {};
     lockedWordsRef.current.clear();
+    clearTargetWord();
+    if (wordBagBookIdRef.current !== wordbookId || !wordBagRef.current.length) {
+      wordBagBookIdRef.current = wordbookId;
+      wordBagRef.current = shuffleWords(selectedWordbook.words);
+    }
     comboRef.current = 0;
     lastClaimRef.current = 0;
     setCombo(0);
@@ -1052,7 +1138,7 @@ export default function SnowballGame() {
     setAnnouncement("前排挡住，后排准备输出！");
     gameStartedAtRef.current = 0;
     setGameStage("countdown");
-  }, [clearPendingTimers, playerName, players, setGameStage]);
+  }, [clearPendingTimers, clearTargetWord, playerName, players, selectedWordbook.words, setGameStage, wordbookId]);
 
   const returnToLobby = useCallback(() => {
     clearPendingTimers();
@@ -1064,13 +1150,14 @@ export default function SnowballGame() {
     actorAvailableAtRef.current = {};
     typedRef.current = "";
     setTyped("");
+    clearTargetWord();
     setWinner(null);
     const healed = playersRef.current.map((player) => ({ ...player, health: player.maxHealth }));
     playersRef.current = healed;
     setPlayers(healed);
     setGameStage("lobby");
     setAnnouncement("等待开战");
-  }, [clearPendingTimers, setGameStage]);
+  }, [clearPendingTimers, clearTargetWord, setGameStage]);
 
   useEffect(() => {
     stageRef.current = stage;
@@ -1098,7 +1185,10 @@ export default function SnowballGame() {
     const timer = window.setTimeout(() => {
       if (countdown <= 0) {
         wordsRef.current = [];
-        for (let index = 0; index < Math.min(5, maxWords); index += 1) spawnWord(8 + index * 9);
+        const initialWordCount = Math.min(snowfallProfile.initialWords, maxWords);
+        for (let index = 0; index < initialWordCount; index += 1) {
+          spawnWord(8 + index * (36 / Math.max(1, initialWordCount - 1)));
+        }
         gameStartedAtRef.current = Date.now();
         setAnnouncement("开战！只输入英文单词");
         setGameStage("playing");
@@ -1107,7 +1197,7 @@ export default function SnowballGame() {
       setCountdown((value) => value - 1);
     }, countdown <= 0 ? 0 : 720);
     return () => window.clearTimeout(timer);
-  }, [countdown, maxWords, setGameStage, spawnWord, stage]);
+  }, [countdown, maxWords, setGameStage, snowfallProfile.initialWords, spawnWord, stage]);
 
   useEffect(() => {
     if (stage === "playing" && userAlive) window.setTimeout(() => inputRef.current?.focus(), 30);
@@ -1141,9 +1231,16 @@ export default function SnowballGame() {
       else claimWord(due.id, bot.id);
     }, 80);
 
-    const spawnTimer = window.setInterval(() => {
-      if (stageRef.current === "playing") spawnWord();
-    }, spawnEvery);
+    let spawnTimer = 0;
+    let spawnLoopStopped = false;
+    const scheduleNextSpawn = () => {
+      const delay = createSpawnDelay(snowfallProfile.interval, spawnPlayerScale);
+      spawnTimer = window.setTimeout(() => {
+        if (stageRef.current === "playing") spawnWord();
+        if (!spawnLoopStopped) scheduleNextSpawn();
+      }, delay);
+    };
+    scheduleNextSpawn();
 
     const clockTimer = window.setInterval(() => {
       if (stageRef.current !== "playing" || !gameStartedAtRef.current) return;
@@ -1157,10 +1254,11 @@ export default function SnowballGame() {
     return () => {
       window.clearInterval(fallTimer);
       window.clearInterval(aiTimer);
-      window.clearInterval(spawnTimer);
+      spawnLoopStopped = true;
+      window.clearTimeout(spawnTimer);
       window.clearInterval(clockTimer);
     };
-  }, [claimWord, reassignWordAi, spawnEvery, spawnWord]);
+  }, [claimWord, reassignWordAi, snowfallProfile.interval, spawnPlayerScale, spawnWord]);
 
   useEffect(() => {
     const handleVisibility = () => {
@@ -1184,14 +1282,22 @@ export default function SnowballGame() {
 
   const handleInput = (event: ChangeEvent<HTMLInputElement>) => {
     if (stageRef.current !== "playing" || !userAlive) return;
+    const previousTyped = typedRef.current;
     const nextValue = event.target.value.toLowerCase().replace(/[^a-z]/g, "").slice(0, 14);
     if (!nextValue) {
       typedRef.current = "";
       setTyped("");
+      clearTargetWord();
       setInputError(false);
       return;
     }
-    const matches = wordsRef.current.filter((word) => word.text.startsWith(nextValue));
+    let target = targetWordIdRef.current === null
+      ? null
+      : wordsRef.current.find((word) => word.id === targetWordIdRef.current) ?? null;
+    if (targetWordIdRef.current !== null && !target) clearTargetWord();
+    const matches = target
+      ? target.text.startsWith(nextValue) ? [target] : []
+      : wordsRef.current.filter((word) => word.text.startsWith(nextValue));
     if (!matches.length) {
       setInputError(true);
       setWrongKeys((value) => value + 1);
@@ -1200,14 +1306,19 @@ export default function SnowballGame() {
       scheduleTimer(() => setInputError(false), 260);
       return;
     }
+    if (!target && matches.length === 1) {
+      target = matches[0];
+      lockTargetWord(target.id);
+    }
     typedRef.current = nextValue;
     setTyped(nextValue);
     setInputError(false);
-    if (nextValue.length > typed.length) setCorrectKeys((value) => value + 1);
-    const exact = matches.find((word) => word.text === nextValue);
+    if (nextValue.length > previousTyped.length) setCorrectKeys((value) => value + 1);
+    const exact = matches.length === 1 && matches[0].text === nextValue ? matches[0] : null;
     if (exact) {
       typedRef.current = "";
       setTyped("");
+      clearTargetWord();
       claimWord(exact.id, "you");
     }
   };
@@ -1217,6 +1328,7 @@ export default function SnowballGame() {
       event.preventDefault();
       typedRef.current = "";
       setTyped("");
+      clearTargetWord();
       setInputError(false);
     }
   };
@@ -1234,6 +1346,9 @@ export default function SnowballGame() {
       setWords(shiftedWords);
       gameStartedAtRef.current += pauseDuration;
       if (lastClaimRef.current > 0) lastClaimRef.current += pauseDuration;
+      Object.keys(actorAvailableAtRef.current).forEach((playerId) => {
+        actorAvailableAtRef.current[playerId] += pauseDuration;
+      });
     }
     pausedAtRef.current = 0;
     setGameStage("playing");
@@ -1291,6 +1406,39 @@ export default function SnowballGame() {
                   {[1, 2, 3, 4].map((count) => <option key={count} value={count}>{count} 人</option>)}
                 </select>
               </label>
+              <label className="lobby-control--wordbook">
+                <span>单词册</span>
+                <select
+                  value={wordbookId}
+                  onChange={(event) => changeWordbook(event.target.value as WordbookId)}
+                  aria-label="选择单词册"
+                >
+                  {WORD_BOOK_OPTIONS.map((wordbook) => (
+                    <option key={wordbook.id} value={wordbook.id}>
+                      {wordbook.label} · {wordbook.words.length} 词
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className="lobby-control--density">
+                <span>雪花密度</span>
+                <select
+                  value={snowfallLevel}
+                  onChange={(event) => setSnowfallLevel(event.target.value as SnowfallLevel)}
+                  aria-label="选择雪花密度"
+                >
+                  {(["light", "classic", "blizzard"] as const).map((level) => (
+                    <option key={level} value={level}>{SNOWFALL_PROFILES[level].label}</option>
+                  ))}
+                </select>
+              </label>
+            </div>
+
+            <div className="wordbook-tip" aria-live="polite">
+              <strong>{selectedWordbook.shortLabel}</strong>
+              <span>{selectedWordbook.description}</span>
+              <small>{selectedWordbook.words.length} 个词 · {selectedWordbook.sourceNote}</small>
+              <small>{snowfallProfile.label}雪量 · 阵雪快慢随机 · 场上最多 {maxWords} 词 · 伤害 10 / 11 / 12 / 13</small>
             </div>
 
             <div className="formation-tip">
@@ -1299,11 +1447,11 @@ export default function SnowballGame() {
             </div>
 
             <button className="primary-button" onClick={startMatch}>
-              <span>{pinePlayers.length} VS {berryPlayers.length} · AI 战术演练</span>
+              <span>{pinePlayers.length} VS {berryPlayers.length} · {selectedWordbook.shortLabel} · {snowfallProfile.short}</span>
               <strong>按阵型开战 →</strong>
             </button>
             <p className="local-note">
-              本机模式 · 1 位真人 + {pinePlayers.length + berryPlayers.length - 1} 位可调强度 AI
+              本机模式 · 1 位真人 + {pinePlayers.length + berryPlayers.length - 1} 位可调强度 AI · 洗牌抽词不连号重复
             </p>
           </div>
 
@@ -1345,7 +1493,7 @@ export default function SnowballGame() {
               </div>
               <div className="room-card__footer">
                 <span>🛡 前排挡伤</span>
-                <span>⌨ 全英文输入</span>
+                <span>⌨ {selectedWordbook.shortLabel} · {snowfallProfile.short}</span>
                 <span>⚙ 每个 AI 独立强度</span>
               </div>
             </div>
@@ -1361,7 +1509,7 @@ export default function SnowballGame() {
             <div className="match-header__status">
               <span>{stage === "playing" ? "对战进行中" : stage === "countdown" ? "即将开战" : stage === "paused" ? "暂停中" : "本局结束"}</span>
               <b>{formatClock(elapsed)}</b>
-              <small>{pinePlayers.length}v{berryPlayers.length} · 前排锁定</small>
+              <small>{pinePlayers.length}v{berryPlayers.length} · {selectedWordbook.shortLabel} · {snowfallProfile.short} · 前排锁定</small>
             </div>
             <button
               className="paper-button"
@@ -1443,7 +1591,10 @@ export default function SnowballGame() {
 
             <div className="word-field" aria-label="不会自动消失的英文单词雪花">
               {words.map((word) => {
-                const matchLength = typed && word.text.startsWith(typed) ? typed.length : 0;
+                const isLockedTarget = targetWordId === word.id;
+                const matchLength = typed && (targetWordId === null || isLockedTarget) && word.text.startsWith(typed)
+                  ? typed.length
+                  : 0;
                 const racer = players.find((player) => player.id === word.aiPlayerId);
                 const aiProgress = word.aiProgress;
                 const playerProgress = matchLength / word.text.length;
@@ -1476,7 +1627,9 @@ export default function SnowballGame() {
                       <strong><b>{word.text.slice(0, matchLength)}</b>{word.text.slice(matchLength)}</strong>
                       <i aria-hidden="true"><span style={{ width: `${visibleProgress * 100}%` }} /></i>
                       <small className="snow-word__state">
-                        {raceState === "leading"
+                        {isLockedTarget
+                          ? "TARGET LOCKED"
+                          : raceState === "leading"
                           ? "YOU'RE FASTEST"
                           : raceState === "contested"
                             ? `${racer?.name ?? "AI"} TYPING`
@@ -1545,7 +1698,11 @@ export default function SnowballGame() {
             </div>
             <label className={`type-box${inputError ? " is-error" : ""}${typed ? " has-text" : ""}`}>
               <span className="type-box__hint">
-                {userAlive ? "只输入英文；绿色表示你当前领先" : "你已出局，AI 队友仍会继续战斗"}
+                {userAlive
+                  ? lockedTarget
+                    ? `已锁定 ${lockedTarget.text}；SPACE / ESC 可放弃`
+                    : `${selectedWordbook.shortLabel}；前缀唯一后自动锁定目标`
+                  : "你已出局，AI 队友仍会继续战斗"}
               </span>
               <div className="type-box__line">
                 <span className="type-box__prompt">EN</span>
