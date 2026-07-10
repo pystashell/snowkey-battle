@@ -13,14 +13,22 @@ import {
 
 type Team = "pine" | "berry";
 type Stage = "lobby" | "countdown" | "playing" | "paused" | "ended";
-type Difficulty = "cozy" | "classic" | "blizzard";
+type AiLevel = "rookie" | "steady" | "expert";
+type PlayerRole = "tank" | "balanced" | "striker";
 
 type Player = {
   id: string;
   name: string;
   team: Team;
   badge: string;
+  slot: number;
+  position: number;
+  role: PlayerRole;
   isUser?: boolean;
+  active: boolean;
+  aiLevel?: AiLevel;
+  health: number;
+  maxHealth: number;
   claims: number;
   damage: number;
 };
@@ -30,10 +38,13 @@ type SnowWord = {
   text: string;
   x: number;
   y: number;
+  restY: number;
   speed: number;
   drift: number;
   bornAt: number;
+  aiStartedAt: number;
   claimAt: number;
+  aiProgress: number;
   aiTeam: Team;
   aiPlayerId: string;
 };
@@ -72,7 +83,6 @@ type CharacterAction = {
 type CatchEffect = {
   id: number;
   team: Team;
-  playerId: string;
   text: string;
   fromX: number;
   fromY: number;
@@ -88,7 +98,12 @@ type ActorAnchor = {
   hitY: number;
 };
 
-const MAX_HEALTH = 120;
+type ManagedTimer = {
+  id: number;
+  dueAt: number;
+  remaining: number;
+  callback: () => void;
+};
 
 const WORDS = [
   "snow",
@@ -110,95 +125,163 @@ const WORDS = [
   "friend",
   "school",
   "holiday",
-  "雪球",
-  "雪花",
-  "围巾",
-  "冬天",
-  "松树",
-  "伙伴",
+  "blizzard",
+  "mittens",
+  "snowman",
+  "sledding",
+  "sparkle",
+  "crystal",
+  "powder",
+  "icicle",
+  "penguin",
+  "mountain",
+  "fireplace",
+  "blanket",
+  "marshmallow",
+  "evergreen",
+  "snowflake",
+  "wonderland",
+  "cabin",
+  "boots",
+  "chilly",
+  "flurry",
+  "glacier",
+  "huddle",
+  "lantern",
+  "shiver",
+  "snowball",
+  "weather",
+  "whiteout",
 ];
 
-const DIFFICULTIES: Record<
-  Difficulty,
+const AI_LEVELS: Record<
+  AiLevel,
   {
     label: string;
-    note: string;
-    minClaim: number;
-    maxClaim: number;
-    allyChance: number;
-    spawnEvery: number;
-    maxWords: number;
+    short: string;
+    reaction: [number, number];
+    charMs: [number, number];
   }
 > = {
-  cozy: {
-    label: "暖手局",
-    note: "队友很给力，适合先找手感",
-    minClaim: 3300,
-    maxClaim: 5600,
-    allyChance: 0.63,
-    spawnEvery: 1120,
-    maxWords: 8,
+  rookie: {
+    label: "新手 AI",
+    short: "慢",
+    reaction: [1500, 2300],
+    charMs: [430, 610],
   },
-  classic: {
-    label: "课间局",
-    note: "和记忆里差不多的抢词速度",
-    minClaim: 2400,
-    maxClaim: 4700,
-    allyChance: 0.48,
-    spawnEvery: 920,
-    maxWords: 9,
+  steady: {
+    label: "熟练 AI",
+    short: "中",
+    reaction: [1000, 1650],
+    charMs: [310, 450],
   },
-  blizzard: {
-    label: "暴雪局",
-    note: "对岸手速很快，长单词伤害更高",
-    minClaim: 1650,
-    maxClaim: 3600,
-    allyChance: 0.34,
-    spawnEvery: 760,
-    maxWords: 10,
+  expert: {
+    label: "高手 AI",
+    short: "快",
+    reaction: [650, 1150],
+    charMs: [230, 340],
   },
 };
 
-const BASE_PLAYERS: Player[] = [
-  { id: "you", name: "小雪球", team: "pine", badge: "你", isUser: true, claims: 0, damage: 0 },
-  { id: "pine-1", name: "阿澄", team: "pine", badge: "澄", claims: 0, damage: 0 },
-  { id: "pine-2", name: "米糕", team: "pine", badge: "糕", claims: 0, damage: 0 },
-  { id: "pine-3", name: "小北", team: "pine", badge: "北", claims: 0, damage: 0 },
-  { id: "berry-1", name: "团子", team: "berry", badge: "团", claims: 0, damage: 0 },
-  { id: "berry-2", name: "柚子", team: "berry", badge: "柚", claims: 0, damage: 0 },
-  { id: "berry-3", name: "阿满", team: "berry", badge: "满", claims: 0, damage: 0 },
-  { id: "berry-4", name: "星星", team: "berry", badge: "星", claims: 0, damage: 0 },
+const ROLE_LABELS: Record<PlayerRole, string> = {
+  tank: "肉盾",
+  balanced: "均衡",
+  striker: "快手",
+};
+
+const PLAYER_SEEDS: Array<Omit<Player, "active" | "position" | "health" | "claims" | "damage">> = [
+  {
+    id: "you",
+    name: "小雪球",
+    team: "pine",
+    badge: "你",
+    slot: 0,
+    role: "balanced",
+    isUser: true,
+    maxHealth: 90,
+  },
+  {
+    id: "pine-1",
+    name: "阿澄",
+    team: "pine",
+    badge: "澄",
+    slot: 1,
+    role: "tank",
+    aiLevel: "rookie",
+    maxHealth: 125,
+  },
+  {
+    id: "pine-2",
+    name: "米糕",
+    team: "pine",
+    badge: "糕",
+    slot: 2,
+    role: "balanced",
+    aiLevel: "steady",
+    maxHealth: 95,
+  },
+  {
+    id: "pine-3",
+    name: "小北",
+    team: "pine",
+    badge: "北",
+    slot: 3,
+    role: "striker",
+    aiLevel: "expert",
+    maxHealth: 72,
+  },
+  {
+    id: "berry-1",
+    name: "团子",
+    team: "berry",
+    badge: "团",
+    slot: 0,
+    role: "tank",
+    aiLevel: "rookie",
+    maxHealth: 130,
+  },
+  {
+    id: "berry-2",
+    name: "柚子",
+    team: "berry",
+    badge: "柚",
+    slot: 1,
+    role: "balanced",
+    aiLevel: "steady",
+    maxHealth: 94,
+  },
+  {
+    id: "berry-3",
+    name: "阿满",
+    team: "berry",
+    badge: "满",
+    slot: 2,
+    role: "striker",
+    aiLevel: "expert",
+    maxHealth: 70,
+  },
+  {
+    id: "berry-4",
+    name: "星星",
+    team: "berry",
+    badge: "星",
+    slot: 3,
+    role: "balanced",
+    aiLevel: "steady",
+    maxHealth: 100,
+  },
 ];
 
 const KID_PALETTES = [
-  { coat: "#e7684f", hat: "#ffd166", scarf: "#f7b34b", skin: "#ffd1aa" },
-  { coat: "#4f877d", hat: "#f08a5d", scarf: "#ffcf72", skin: "#edb990" },
-  { coat: "#8c68a8", hat: "#e85d75", scarf: "#ffd166", skin: "#f4c39c" },
-  { coat: "#d58a42", hat: "#4f877d", scarf: "#f6e27a", skin: "#d99e76" },
-  { coat: "#4b83b4", hat: "#ef6d67", scarf: "#f7b34b", skin: "#f1c09a" },
-  { coat: "#696fa3", hat: "#55a9b8", scarf: "#f7cc68", skin: "#dca47d" },
-  { coat: "#3f7898", hat: "#a86c9d", scarf: "#f4a261", skin: "#f3c6a3" },
-  { coat: "#6f83b7", hat: "#d45c70", scarf: "#ffd166", skin: "#e5ad86" },
+  { coat: "#3c9b4d", hat: "#23813e", scarf: "#ffd166", skin: "#ffd1aa" },
+  { coat: "#48a958", hat: "#1f7a38", scarf: "#f4b942", skin: "#edb990" },
+  { coat: "#2f9144", hat: "#50b55e", scarf: "#ffe08a", skin: "#f4c39c" },
+  { coat: "#63b85d", hat: "#297f3c", scarf: "#f6c453", skin: "#d99e76" },
+  { coat: "#dc3f46", hat: "#b82134", scarf: "#ffd166", skin: "#f1c09a" },
+  { coat: "#e95158", hat: "#c72d3d", scarf: "#f7c75f", skin: "#dca47d" },
+  { coat: "#c92f42", hat: "#ef6267", scarf: "#ffd883", skin: "#f3c6a3" },
+  { coat: "#e6605f", hat: "#b52839", scarf: "#ffd166", skin: "#e5ad86" },
 ];
-
-function getActorAnchor(player: Player): ActorAnchor {
-  const teamPlayers = BASE_PLAYERS.filter((item) => item.team === player.team);
-  const index = Math.max(0, teamPlayers.findIndex((item) => item.id === player.id));
-  const pineX = [7.4, 15.3, 23.1, 30.7];
-  const berryX = [92.6, 84.7, 76.9, 69.3];
-  const handY = [68, 62, 71, 59];
-  return {
-    x: player.team === "pine" ? pineX[index] : berryX[index],
-    handY: handY[index],
-    hitY: handY[index] - 6,
-  };
-}
-
-function createIdleActions(): Record<string, CharacterAction> {
-  return Object.fromEntries(
-    BASE_PLAYERS.map((player) => [player.id, { phase: "idle", token: 0 }]),
-  ) as Record<string, CharacterAction>;
-}
 
 const AMBIENT_SNOW = Array.from({ length: 34 }, (_, index) => ({
   id: index,
@@ -212,12 +295,68 @@ function clamp(value: number, minimum: number, maximum: number) {
   return Math.max(minimum, Math.min(maximum, value));
 }
 
+function randomBetween([minimum, maximum]: [number, number]) {
+  return minimum + Math.random() * (maximum - minimum);
+}
+
 function formatClock(seconds: number) {
-  const minutes = Math.floor(seconds / 60)
-    .toString()
-    .padStart(2, "0");
+  const minutes = Math.floor(seconds / 60).toString().padStart(2, "0");
   const rest = (seconds % 60).toString().padStart(2, "0");
   return `${minutes}:${rest}`;
+}
+
+function createInitialPlayers(pineCount = 3, berryCount = 3): Player[] {
+  return PLAYER_SEEDS.map((seed) => {
+    const count = seed.team === "pine" ? pineCount : berryCount;
+    const active = seed.slot < count;
+    return {
+      ...seed,
+      active,
+      position: seed.slot,
+      health: seed.maxHealth,
+      claims: 0,
+      damage: 0,
+    };
+  });
+}
+
+function createIdleActions(): Record<string, CharacterAction> {
+  return Object.fromEntries(
+    PLAYER_SEEDS.map((player) => [player.id, { phase: "idle", token: 0 }]),
+  ) as Record<string, CharacterAction>;
+}
+
+function getActorAnchor(player: Player): ActorAnchor {
+  const pineX = [31, 23, 15, 7];
+  const berryX = [69, 77, 85, 93];
+  const handY = [59, 70, 63, 72];
+  const rank = clamp(player.position, 0, 3);
+  return {
+    x: player.team === "pine" ? pineX[rank] : berryX[rank],
+    handY: handY[rank],
+    hitY: handY[rank] - 6,
+  };
+}
+
+function createAiTiming(player: Player, text: string, bornAt: number) {
+  const profile = AI_LEVELS[player.aiLevel ?? "steady"];
+  const startedAt = bornAt + randomBetween(profile.reaction);
+  const typingTime = text.length * randomBetween(profile.charMs);
+  const stumble = Math.random() < 0.12 ? 450 + Math.random() * 550 : 0;
+  return { startedAt, claimAt: startedAt + typingTime + stumble };
+}
+
+const FORMATION_LEFT: Record<Team, number[]> = {
+  pine: [82, 56, 28, 0],
+  berry: [0, 28, 56, 82],
+};
+const FORMATION_BOTTOM = [37, 2, 25, 0];
+const FORMATION_SCALE = [1.03, 0.94, 0.9, 0.84];
+
+function getFrontlineId(players: Player[], team: Team) {
+  return players
+    .filter((player) => player.active && player.team === team && player.health > 0)
+    .sort((a, b) => a.position - b.position)[0]?.id ?? null;
 }
 
 function TeamMark({ team }: { team: Team }) {
@@ -227,16 +366,18 @@ function TeamMark({ team }: { team: Team }) {
 function Kid({
   player,
   action,
+  isFront,
   finale,
   nodeRef,
 }: {
   player: Player;
   action: CharacterAction;
+  isFront: boolean;
   finale?: "cheer" | "defeat";
   nodeRef?: (node: HTMLDivElement | null) => void;
 }) {
   const phase = action.phase === "hit" ? "hit" : finale ?? action.phase;
-  const paletteIndex = Math.max(0, BASE_PLAYERS.findIndex((item) => item.id === player.id));
+  const paletteIndex = Math.max(0, PLAYER_SEEDS.findIndex((item) => item.id === player.id));
   const palette = KID_PALETTES[paletteIndex];
   const actionLabel: Partial<Record<CharacterPhase, string>> = {
     catch: "抓住！",
@@ -245,8 +386,9 @@ function Kid({
     throw: "扔！",
     hit: "哎呀！",
     cheer: "好耶！",
-    defeat: "呜…",
+    defeat: "出局",
   };
+  const healthPercent = (player.health / player.maxHealth) * 100;
 
   return (
     <div
@@ -258,9 +400,12 @@ function Kid({
           "--kid-hat": palette.hat,
           "--kid-scarf": palette.scarf,
           "--kid-skin": palette.skin,
+          "--kid-left": `${FORMATION_LEFT[player.team][player.position]}%`,
+          "--kid-bottom": `${FORMATION_BOTTOM[player.position]}px`,
+          "--formation-scale": FORMATION_SCALE[player.position],
         } as CSSProperties
       }
-      aria-label={`${player.name}，${actionLabel[phase] ?? "准备中"}`}
+      aria-label={`${player.name}，${player.health}/${player.maxHealth} 点血量，${actionLabel[phase] ?? "准备中"}`}
     >
       <span className="kid__shadow" aria-hidden="true" />
       <div className="kid__scale">
@@ -269,6 +414,7 @@ function Kid({
           <span className="kid__leg kid__leg--front"><i /></span>
           <span className="kid__arm kid__arm--back"><i className="kid__mitten" /></span>
           <span className="kid__body"><i className="kid__zip" /><i className="kid__pocket" /></span>
+          <span className="kid__hood" />
           <span className="kid__head">
             <span className="kid__face"><i /><i /><b /></span>
             <span className="kid__ear" />
@@ -282,14 +428,32 @@ function Kid({
           </span>
         </div>
       </div>
+      <span className="kid__hp" aria-hidden="true">
+        <i style={{ width: `${healthPercent}%` }} />
+        <b>{player.health}</b>
+      </span>
       {actionLabel[phase] && <span className="kid__action">{actionLabel[phase]}</span>}
-      <span className="kid__name">{player.name}</span>
+      <span className="kid__name">
+        {isFront ? "🛡 " : ""}{player.name}
+      </span>
     </div>
   );
 }
 
-function RosterCard({ player }: { player: Player }) {
-  const paletteIndex = Math.max(0, BASE_PLAYERS.findIndex((item) => item.id === player.id));
+function RosterCard({
+  player,
+  index,
+  total,
+  onMove,
+  onLevelChange,
+}: {
+  player: Player;
+  index: number;
+  total: number;
+  onMove: (direction: -1 | 1) => void;
+  onLevelChange: (level: AiLevel) => void;
+}) {
+  const paletteIndex = Math.max(0, PLAYER_SEEDS.findIndex((item) => item.id === player.id));
   const palette = KID_PALETTES[paletteIndex];
   return (
     <div className={`roster-card roster-card--${player.team}${player.isUser ? " is-you" : ""}`}>
@@ -309,27 +473,67 @@ function RosterCard({ player }: { player: Player }) {
         <i className="roster-card__hat" />
         <b className="roster-card__arm" />
       </span>
-      <span>
+      <span className="roster-card__identity">
         <strong>{player.name}</strong>
-        <small>{player.isUser ? "本地玩家" : `${player.claims} 次命中`}</small>
+        <small>
+          {index === 0 ? "前排 · " : `第 ${index + 1} 位 · `}
+          {ROLE_LABELS[player.role]} · {player.maxHealth} HP
+        </small>
       </span>
-      <i aria-label="已准备">✓</i>
+      <span className="roster-card__settings">
+        {player.isUser ? (
+          <em>真人</em>
+        ) : (
+          <select
+            value={player.aiLevel}
+            onChange={(event) => onLevelChange(event.target.value as AiLevel)}
+            aria-label={`${player.name} AI 强度`}
+          >
+            {Object.entries(AI_LEVELS).map(([value, profile]) => (
+              <option key={value} value={value}>{profile.label}</option>
+            ))}
+          </select>
+        )}
+        <span className="formation-buttons">
+          <button onClick={() => onMove(-1)} disabled={index === 0} aria-label={`${player.name} 前移`}>前</button>
+          <button onClick={() => onMove(1)} disabled={index === total - 1} aria-label={`${player.name} 后移`}>后</button>
+        </span>
+      </span>
+    </div>
+  );
+}
+
+function TeamHealthRows({
+  players,
+  team,
+  frontlineId,
+}: {
+  players: Player[];
+  team: Team;
+  frontlineId: string | null;
+}) {
+  return (
+    <div className={`member-health-list member-health-list--${team}`}>
+      {players.map((player) => (
+        <div key={player.id} className={`member-health${player.health <= 0 ? " is-out" : ""}`}>
+          <span>{player.id === frontlineId ? "盾 " : ""}{player.name}</span>
+          <i><b style={{ width: `${(player.health / player.maxHealth) * 100}%` }} /></i>
+          <strong>{player.health}</strong>
+        </div>
+      ))}
     </div>
   );
 }
 
 export default function SnowballGame() {
   const [stage, setStage] = useState<Stage>("lobby");
-  const [difficulty, setDifficulty] = useState<Difficulty>("classic");
   const [playerName, setPlayerName] = useState("小雪球");
-  const [players, setPlayers] = useState<Player[]>(BASE_PLAYERS);
+  const [players, setPlayers] = useState<Player[]>(() => createInitialPlayers());
   const [words, setWords] = useState<SnowWord[]>([]);
   const [projectiles, setProjectiles] = useState<Projectile[]>([]);
   const [catchEffects, setCatchEffects] = useState<CatchEffect[]>([]);
   const [characterActions, setCharacterActions] =
     useState<Record<string, CharacterAction>>(createIdleActions);
-  const [pineHealth, setPineHealth] = useState(MAX_HEALTH);
-  const [berryHealth, setBerryHealth] = useState(MAX_HEALTH);
   const [typed, setTyped] = useState("");
   const [combo, setCombo] = useState(0);
   const [bestCombo, setBestCombo] = useState(0);
@@ -348,70 +552,132 @@ export default function SnowballGame() {
   const stageRef = useRef<Stage>(stage);
   const wordsRef = useRef<SnowWord[]>([]);
   const playersRef = useRef<Player[]>(players);
-  const pineHealthRef = useRef(MAX_HEALTH);
-  const berryHealthRef = useRef(MAX_HEALTH);
+  const typedRef = useRef("");
   const comboRef = useRef(0);
   const lastClaimRef = useRef(0);
   const gameStartedAtRef = useRef(0);
   const sequenceRef = useRef(0);
   const lockedWordsRef = useRef(new Set<number>());
-  const timersRef = useRef<number[]>([]);
+  const timersRef = useRef<ManagedTimer[]>([]);
   const actorAvailableAtRef = useRef<Record<string, number>>({});
-  const targetCursorRef = useRef<Record<Team, number>>({ pine: 0, berry: 0 });
+  const pausedAtRef = useRef(0);
 
-  const config = DIFFICULTIES[difficulty];
   const activePlayers = useMemo(
     () =>
-      players.map((player) =>
-        player.id === "you" ? { ...player, name: playerName.trim() || "小雪球" } : player,
-      ),
+      players
+        .filter((player) => player.active)
+        .map((player) =>
+          player.id === "you" ? { ...player, name: playerName.trim() || "小雪球" } : player,
+        ),
     [playerName, players],
   );
-  const pinePlayers = activePlayers.filter((player) => player.team === "pine");
-  const berryPlayers = activePlayers.filter((player) => player.team === "berry");
+  const pinePlayers = activePlayers
+    .filter((player) => player.team === "pine")
+    .sort((a, b) => a.position - b.position);
+  const berryPlayers = activePlayers
+    .filter((player) => player.team === "berry")
+    .sort((a, b) => a.position - b.position);
+  const pineAlive = pinePlayers.filter((player) => player.health > 0).length;
+  const berryAlive = berryPlayers.filter((player) => player.health > 0).length;
+  const pineFrontlineId = getFrontlineId(activePlayers, "pine");
+  const berryFrontlineId = getFrontlineId(activePlayers, "berry");
+  const user = activePlayers.find((player) => player.isUser);
+  const userAlive = Boolean(user && user.health > 0);
   const totalKeys = correctKeys + wrongKeys;
   const accuracy = totalKeys ? Math.round((correctKeys / totalKeys) * 100) : 100;
-  const matchingWords = typed
-    ? words.filter((word) => word.text.toLowerCase().startsWith(typed.toLowerCase()))
-    : [];
+  const matchingWords = typed ? words.filter((word) => word.text.startsWith(typed)) : [];
   const focusedWordId = matchingWords.length === 1 ? matchingWords[0].id : null;
+  const spawnEvery = clamp(1450 - activePlayers.length * 95, 720, 1200);
+  const maxWords = clamp(activePlayers.length + 5, 7, 12);
 
   const setGameStage = useCallback((nextStage: Stage) => {
     stageRef.current = nextStage;
     setStage(nextStage);
   }, []);
 
-  const rememberTimer = useCallback((timer: number) => {
+  const scheduleTimer = useCallback((callback: () => void, delay: number) => {
+    const remaining = Math.max(0, delay);
+    const timer: ManagedTimer = {
+      id: 0,
+      dueAt: Date.now() + remaining,
+      remaining,
+      callback,
+    };
+    timer.id = window.setTimeout(() => {
+      timersRef.current = timersRef.current.filter((candidate) => candidate !== timer);
+      callback();
+    }, remaining);
     timersRef.current.push(timer);
-    return timer;
+    return timer.id;
   }, []);
+
+  const pausePendingTimers = useCallback(() => {
+    const now = Date.now();
+    timersRef.current.forEach((timer) => {
+      window.clearTimeout(timer.id);
+      timer.remaining = Math.max(0, timer.dueAt - now);
+    });
+  }, []);
+
+  const resumePendingTimers = useCallback(() => {
+    const now = Date.now();
+    timersRef.current.forEach((timer) => {
+      timer.dueAt = now + timer.remaining;
+      timer.id = window.setTimeout(() => {
+        timersRef.current = timersRef.current.filter((candidate) => candidate !== timer);
+        timer.callback();
+      }, timer.remaining);
+    });
+  }, []);
+
+  const clearPendingTimers = useCallback(() => {
+    timersRef.current.forEach((timer) => window.clearTimeout(timer.id));
+    timersRef.current = [];
+  }, []);
+
+  const say = useCallback(
+    (message: string) => {
+      setAnnouncement(message);
+      scheduleTimer(() => {
+        if (stageRef.current === "playing") setAnnouncement("继续抢单词雪花！");
+      }, 1600);
+    },
+    [scheduleTimer],
+  );
 
   const setCharacterPose = useCallback(
     (playerId: string, phase: CharacterPhase, word?: string) => {
+      const token = ++sequenceRef.current;
       setCharacterActions((current) => ({
         ...current,
         [playerId]: {
           phase,
-          token: ++sequenceRef.current,
+          token,
           ...(word ? { word } : {}),
         },
       }));
+      return token;
     },
     [],
   );
 
-  const settleCharacterPose = useCallback(
-    (playerId: string, expectedPhase: CharacterPhase) => {
-      setCharacterActions((current) => {
-        if (current[playerId]?.phase !== expectedPhase) return current;
-        return {
-          ...current,
-          [playerId]: { phase: "idle", token: ++sequenceRef.current },
-        };
-      });
-    },
-    [],
-  );
+  const settleCharacterPose = useCallback((
+    playerId: string,
+    expectedPhase: CharacterPhase,
+    expectedToken?: number,
+  ) => {
+    setCharacterActions((current) => {
+      const action = current[playerId];
+      if (
+        action?.phase !== expectedPhase ||
+        (expectedToken !== undefined && action.token !== expectedToken)
+      ) return current;
+      return {
+        ...current,
+        [playerId]: { phase: "idle", token: ++sequenceRef.current },
+      };
+    });
+  }, []);
 
   const pointInArena = useCallback(
     (node: HTMLElement | undefined, xFactor = 0.5, yFactor = 0.5) => {
@@ -426,62 +692,126 @@ export default function SnowballGame() {
     [],
   );
 
-  const clearPendingTimers = useCallback(() => {
-    timersRef.current.forEach((timer) => window.clearTimeout(timer));
-    timersRef.current = [];
-  }, []);
+  const changeTeamSize = (team: Team, requestedSize: number) => {
+    setPlayers((current) => {
+      const teamPlayers = current.filter((player) => player.team === team);
+      const active = teamPlayers.filter((player) => player.active).sort((a, b) => a.position - b.position);
+      let next = current;
+      if (requestedSize < active.length) {
+        let keep = active.slice(0, requestedSize);
+        if (team === "pine") {
+          const localPlayer = active.find((player) => player.isUser);
+          if (localPlayer && !keep.some((player) => player.id === localPlayer.id)) {
+            keep = [
+              ...active.filter((player) => !player.isUser).slice(0, requestedSize - 1),
+              localPlayer,
+            ].sort((a, b) => a.position - b.position);
+          }
+        }
+        const keepIds = new Set(keep.map((player) => player.id));
+        next = current.map((player) =>
+          player.team === team && player.active && !keepIds.has(player.id)
+            ? { ...player, active: false }
+            : player,
+        );
+      } else if (requestedSize > active.length) {
+        const inactive = teamPlayers
+          .filter((player) => !player.active)
+          .sort((a, b) => a.slot - b.slot)
+          .slice(0, requestedSize - active.length);
+        const addIds = new Set(inactive.map((player) => player.id));
+        let nextPosition = active.length;
+        next = current.map((player) =>
+          addIds.has(player.id)
+            ? { ...player, active: true, position: nextPosition++, health: player.maxHealth }
+            : player,
+        );
+      }
+      const normalized = next.map((player) => {
+        if (player.team !== team || !player.active) return player;
+        const order = next
+          .filter((candidate) => candidate.team === team && candidate.active)
+          .sort((a, b) => a.position - b.position);
+        return { ...player, position: order.findIndex((candidate) => candidate.id === player.id) };
+      });
+      playersRef.current = normalized;
+      return normalized;
+    });
+  };
 
-  const say = useCallback(
-    (message: string) => {
-      setAnnouncement(message);
-      rememberTimer(
-        window.setTimeout(() => {
-          if (stageRef.current === "playing") setAnnouncement("继续抢雪花！");
-        }, 1500),
-      );
-    },
-    [rememberTimer],
-  );
+  const movePlayer = (playerId: string, direction: -1 | 1) => {
+    setPlayers((current) => {
+      const player = current.find((item) => item.id === playerId);
+      if (!player) return current;
+      const order = current
+        .filter((item) => item.team === player.team && item.active)
+        .sort((a, b) => a.position - b.position);
+      const index = order.findIndex((item) => item.id === playerId);
+      const swap = order[index + direction];
+      if (!swap) return current;
+      const next = current.map((item) => {
+        if (item.id === player.id) return { ...item, position: swap.position };
+        if (item.id === swap.id) return { ...item, position: player.position };
+        return item;
+      });
+      playersRef.current = next;
+      return next;
+    });
+  };
 
-  const registerHit = useCallback((playerId: string, damage: number) => {
+  const changeAiLevel = (playerId: string, level: AiLevel) => {
     setPlayers((current) => {
       const next = current.map((player) =>
-        player.id === playerId
-          ? { ...player, claims: player.claims + 1, damage: player.damage + damage }
-          : player,
+        player.id === playerId ? { ...player, aiLevel: level } : player,
       );
       playersRef.current = next;
       return next;
     });
-  }, []);
+  };
 
   const endMatch = useCallback(
     (winningTeam: Team) => {
       setWinner(winningTeam);
+      typedRef.current = "";
       setTyped("");
       setGameStage("ended");
-      setAnnouncement(winningTeam === "pine" ? "雪松队守住了河岸！" : "红莓队赢下这场雪仗！");
+      setAnnouncement(winningTeam === "pine" ? "雪松队守住了河岸！" : "红莓队突破了防线！");
     },
     [setGameStage],
   );
 
-  const applyDamage = useCallback(
-    (attackingTeam: Team, damage: number) => {
-      const target: Team = attackingTeam === "pine" ? "berry" : "pine";
+  const registerClaim = useCallback((playerId: string) => {
+    const next = playersRef.current.map((player) =>
+      player.id === playerId ? { ...player, claims: player.claims + 1 } : player,
+    );
+    playersRef.current = next;
+    setPlayers(next);
+  }, []);
 
-      if (target === "berry") {
-        const next = clamp(berryHealthRef.current - damage, 0, MAX_HEALTH);
-        berryHealthRef.current = next;
-        setBerryHealth(next);
-        if (next === 0) endMatch("pine");
-      } else {
-        const next = clamp(pineHealthRef.current - damage, 0, MAX_HEALTH);
-        pineHealthRef.current = next;
-        setPineHealth(next);
-        if (next === 0) endMatch("berry");
+  const applyDamage = useCallback(
+    (attackerId: string, targetId: string, requestedDamage: number) => {
+      if (stageRef.current === "ended") return;
+      const target = playersRef.current.find((player) => player.id === targetId);
+      if (!target || !target.active || target.health <= 0) return;
+      const actualDamage = Math.min(target.health, requestedDamage);
+      const next = playersRef.current.map((player) => {
+        if (player.id === targetId) return { ...player, health: player.health - actualDamage };
+        if (player.id === attackerId) return { ...player, damage: player.damage + actualDamage };
+        return player;
+      });
+      playersRef.current = next;
+      setPlayers(next);
+      if (target.isUser && target.health - actualDamage <= 0) {
+        typedRef.current = "";
+        setTyped("");
       }
+      say(`${target.name} 承受 ${actualDamage} 点伤害${target.health - actualDamage <= 0 ? "，出局！" : ""}`);
+      const survivors = next.filter(
+        (player) => player.active && player.team === target.team && player.health > 0,
+      );
+      if (!survivors.length) endMatch(target.team === "pine" ? "berry" : "pine");
     },
-    [endMatch],
+    [endMatch, say],
   );
 
   const launchSnowball = useCallback(
@@ -491,103 +821,104 @@ export default function SnowballGame() {
       const queueDelay = startsAt - now;
       actorAvailableAtRef.current[player.id] = startsAt + 1850;
 
-      const opponents = playersRef.current.filter((candidate) => candidate.team !== player.team);
-      const targetTeam: Team = player.team === "pine" ? "berry" : "pine";
-      const targetIndex = targetCursorRef.current[targetTeam] % opponents.length;
-      targetCursorRef.current[targetTeam] += 1;
-      const target = opponents[targetIndex];
-      if (!target) return;
-
       const sourceFallback = getActorAnchor(player);
-      const targetFallback = getActorAnchor(target);
-      const visibleWord = pointInArena(wordNodesRef.current.get(word.id)) ?? {
-        x: word.x,
-        y: word.y,
-      };
-      const sourceAnchor = pointInArena(
-        kidNodesRef.current.get(player.id),
-        player.team === "pine" ? 0.78 : 0.22,
-        0.56,
-      ) ?? { x: sourceFallback.x, y: sourceFallback.handY };
-      const targetAnchor = pointInArena(
-        kidNodesRef.current.get(target.id),
-        0.5,
-        0.37,
-      ) ?? { x: targetFallback.x, y: targetFallback.hitY };
+      const visibleWord = pointInArena(wordNodesRef.current.get(word.id)) ?? { x: word.x, y: word.y };
       const catchId = ++sequenceRef.current;
       const projectileId = ++sequenceRef.current;
-      const catchEffect: CatchEffect = {
-        id: catchId,
-        team: player.team,
-        playerId: player.id,
-        text: word.text,
-        fromX: visibleWord.x,
-        fromY: visibleWord.y,
-        midX: (visibleWord.x + sourceAnchor.x) / 2,
-        apexY: Math.max(6, Math.min(visibleWord.y, sourceAnchor.y) - 11),
-        toX: sourceAnchor.x,
-        toY: sourceAnchor.y,
-      };
-      const projectile: Projectile = {
-        id: projectileId,
-        team: player.team,
-        text: word.text,
-        damage,
-        sourcePlayerId: player.id,
-        targetPlayerId: target.id,
-        fromX: sourceAnchor.x,
-        fromY: sourceAnchor.y,
-        midX: (sourceAnchor.x + targetAnchor.x) / 2,
-        apexY: Math.max(8, Math.min(sourceAnchor.y, targetAnchor.y) - 28),
-        toX: targetAnchor.x,
-        toY: targetAnchor.y,
-      };
+      let throwToken: number | undefined;
 
-      rememberTimer(
-        window.setTimeout(() => {
-          if (stageRef.current === "ended") return;
-          setCatchEffects((current) => [...current, catchEffect]);
-          setCharacterPose(player.id, "catch", word.text);
-        }, queueDelay),
-      );
-      rememberTimer(
-        window.setTimeout(() => {
-          setCatchEffects((current) => current.filter((effect) => effect.id !== catchId));
-          if (stageRef.current !== "ended") setCharacterPose(player.id, "hold", word.text);
-        }, queueDelay + 410),
-      );
-      rememberTimer(
-        window.setTimeout(() => {
-          if (stageRef.current !== "ended") setCharacterPose(player.id, "windup", word.text);
-        }, queueDelay + 650),
-      );
-      rememberTimer(
-        window.setTimeout(() => {
-          if (stageRef.current === "ended") return;
-          setCharacterPose(player.id, "throw", word.text);
-          setProjectiles((current) => [...current, projectile]);
-        }, queueDelay + 900),
-      );
-      rememberTimer(
-        window.setTimeout(() => {
+      scheduleTimer(() => {
+        const attacker = playersRef.current.find((candidate) => candidate.id === player.id);
+        if (stageRef.current === "ended" || !attacker || attacker.health <= 0) return;
+        const mitten = kidNodesRef.current
+          .get(player.id)
+          ?.querySelector<HTMLElement>(".kid__arm--front .kid__mitten") ?? undefined;
+        const sourceAnchor = pointInArena(mitten) ?? { x: sourceFallback.x, y: sourceFallback.handY };
+        const catchEffect: CatchEffect = {
+          id: catchId,
+          team: player.team,
+          text: word.text,
+          fromX: visibleWord.x,
+          fromY: visibleWord.y,
+          midX: (visibleWord.x + sourceAnchor.x) / 2,
+          apexY: Math.max(6, Math.min(visibleWord.y, sourceAnchor.y) - 11),
+          toX: sourceAnchor.x,
+          toY: sourceAnchor.y,
+        };
+        setCatchEffects((current) => [...current, catchEffect]);
+        setCharacterPose(player.id, "catch", word.text);
+      }, queueDelay);
+      scheduleTimer(() => {
+        setCatchEffects((current) => current.filter((effect) => effect.id !== catchId));
+        const attacker = playersRef.current.find((candidate) => candidate.id === player.id);
+        if (stageRef.current !== "ended" && attacker && attacker.health > 0) {
+          setCharacterPose(player.id, "hold", word.text);
+        }
+      }, queueDelay + 410);
+      scheduleTimer(() => {
+        const attacker = playersRef.current.find((candidate) => candidate.id === player.id);
+        if (stageRef.current !== "ended" && attacker && attacker.health > 0) {
+          setCharacterPose(player.id, "windup", word.text);
+        }
+      }, queueDelay + 650);
+      scheduleTimer(() => {
+        const attacker = playersRef.current.find((candidate) => candidate.id === player.id);
+        if (stageRef.current === "ended" || !attacker || attacker.health <= 0) return;
+        const targets = playersRef.current
+          .filter((candidate) => candidate.active && candidate.team !== player.team && candidate.health > 0)
+          .sort((a, b) => a.position - b.position);
+        const target = targets[0];
+        if (!target) return;
+        const freshSourceFallback = getActorAnchor(attacker);
+        const targetFallback = getActorAnchor(target);
+        const sourceMitten = kidNodesRef.current
+          .get(attacker.id)
+          ?.querySelector<HTMLElement>(".kid__arm--front .kid__mitten") ?? undefined;
+        const targetHead = kidNodesRef.current
+          .get(target.id)
+          ?.querySelector<HTMLElement>(".kid__head") ?? undefined;
+        const freshSource = pointInArena(sourceMitten) ?? {
+          x: freshSourceFallback.x,
+          y: freshSourceFallback.handY,
+        };
+        const freshTarget = pointInArena(targetHead) ?? {
+          x: targetFallback.x,
+          y: targetFallback.hitY,
+        };
+        const projectile: Projectile = {
+          id: projectileId,
+          team: attacker.team,
+          text: word.text,
+          damage,
+          sourcePlayerId: attacker.id,
+          targetPlayerId: target.id,
+          fromX: freshSource.x,
+          fromY: freshSource.y,
+          midX: (freshSource.x + freshTarget.x) / 2,
+          apexY: Math.max(8, Math.min(freshSource.y, freshTarget.y) - 28),
+          toX: freshTarget.x,
+          toY: freshTarget.y,
+        };
+        throwToken = setCharacterPose(attacker.id, "throw", word.text);
+        setProjectiles((current) => [...current, projectile]);
+        scheduleTimer(() => {
           setProjectiles((current) => current.filter((item) => item.id !== projectileId));
-          if (stageRef.current === "ended") return;
-          setCharacterPose(target.id, "hit");
-          applyDamage(player.team, damage);
-        }, queueDelay + 1510),
-      );
-      rememberTimer(
-        window.setTimeout(() => {
-          settleCharacterPose(player.id, "throw");
-        }, queueDelay + 1740),
-      );
-      rememberTimer(
-        window.setTimeout(() => {
-          settleCharacterPose(target.id, "hit");
-        }, queueDelay + 2110),
+          const currentTarget = playersRef.current.find((candidate) => candidate.id === target.id);
+          if (!currentTarget || currentTarget.health <= 0) {
+            say(`${word.text} 落在了空雪地上`);
+            return;
+          }
+          const hitToken = setCharacterPose(target.id, "hit");
+          applyDamage(attacker.id, target.id, damage);
+          scheduleTimer(() => settleCharacterPose(target.id, "hit", hitToken), 620);
+        }, 610);
+      }, queueDelay + 900);
+      scheduleTimer(
+        () => settleCharacterPose(player.id, "throw", throwToken),
+        queueDelay + 1740,
       );
     },
-    [applyDamage, pointInArena, rememberTimer, setCharacterPose, settleCharacterPose],
+    [applyDamage, pointInArena, say, scheduleTimer, setCharacterPose, settleCharacterPose],
   );
 
   const claimWord = useCallback(
@@ -595,14 +926,14 @@ export default function SnowballGame() {
       if (stageRef.current !== "playing" || lockedWordsRef.current.has(wordId)) return;
       const word = wordsRef.current.find((item) => item.id === wordId);
       const player = playersRef.current.find((item) => item.id === playerId);
-      if (!word || !player) return;
+      if (!word || !player || !player.active || player.health <= 0) return;
 
       lockedWordsRef.current.add(wordId);
       const nextWords = wordsRef.current.filter((item) => item.id !== wordId);
       wordsRef.current = nextWords;
       setWords(nextWords);
 
-      let damage = clamp(5 + word.text.length, 8, 13);
+      let damage = clamp(5 + word.text.length, 8, 15);
       if (player.isUser) {
         const now = Date.now();
         const nextCombo = now - lastClaimRef.current < 4200 ? comboRef.current + 1 : 1;
@@ -610,64 +941,90 @@ export default function SnowballGame() {
         lastClaimRef.current = now;
         setCombo(nextCombo);
         setBestCombo((current) => Math.max(current, nextCombo));
-        damage = clamp(damage + Math.floor(nextCombo / 3), 8, 16);
-        say(`${word.text} 抢到了！连击 ×${nextCombo}`);
+        damage = clamp(damage + Math.floor(nextCombo / 3), 8, 18);
+        say(`${word.text} — 你最快！连击 ×${nextCombo}`);
       } else {
-        const stillMatches = typed && nextWords.some((item) => item.text.startsWith(typed));
-        if (typed && word.text.startsWith(typed) && !stillMatches) {
+        const currentTyped = typedRef.current;
+        const stillMatches = currentTyped && nextWords.some((item) => item.text.startsWith(currentTyped));
+        if (currentTyped && word.text.startsWith(currentTyped) && !stillMatches) {
+          typedRef.current = "";
           setTyped("");
-          say(`被 ${player.name} 抢先了！`);
-        } else {
-          say(`${player.name} 抢到「${word.text}」`);
         }
+        say(`${player.name} 抢走了 ${word.text}`);
       }
 
-      registerHit(player.id, damage);
+      registerClaim(player.id);
       launchSnowball(player, word, damage);
     },
-    [launchSnowball, registerHit, say, typed],
+    [launchSnowball, registerClaim, say],
   );
 
   const spawnWord = useCallback(
     (seedY?: number) => {
-      if (wordsRef.current.length >= config.maxWords) return;
+      if (wordsRef.current.length >= maxWords) return;
       const active = new Set(wordsRef.current.map((word) => word.text));
       const available = WORDS.filter((word) => !active.has(word));
-      if (!available.length) return;
-
-      const team: Team = Math.random() < config.allyChance ? "pine" : "berry";
-      const candidates = playersRef.current.filter(
-        (player) => player.team === team && !player.isUser,
+      const bots = playersRef.current.filter(
+        (player) => player.active && !player.isUser && player.health > 0,
       );
-      const aiPlayer = candidates[Math.floor(Math.random() * candidates.length)];
-      if (!aiPlayer) return;
-
+      if (!available.length || !bots.length) return;
+      const bot = bots[Math.floor(Math.random() * bots.length)];
+      const text = available[Math.floor(Math.random() * available.length)];
       const bornAt = Date.now();
+      const timing = createAiTiming(bot, text, bornAt);
+      const id = ++sequenceRef.current;
       const word: SnowWord = {
-        id: ++sequenceRef.current,
-        text: available[Math.floor(Math.random() * available.length)],
-        x: 19 + Math.random() * 62,
+        id,
+        text,
+        x: 17 + Math.random() * 66,
         y: seedY ?? 7 + Math.random() * 8,
-        speed: 4.2 + Math.random() * 2.4,
-        drift: -10 + Math.random() * 20,
+        restY: 52 + ((id * 11) % 20),
+        speed: 4 + Math.random() * 2.3,
+        drift: -13 + Math.random() * 26,
         bornAt,
-        claimAt:
-          bornAt + config.minClaim + Math.random() * (config.maxClaim - config.minClaim),
-        aiTeam: team,
-        aiPlayerId: aiPlayer.id,
+        aiStartedAt: timing.startedAt,
+        claimAt: timing.claimAt,
+        aiProgress: 0,
+        aiTeam: bot.team,
+        aiPlayerId: bot.id,
       };
       const next = [...wordsRef.current, word];
       wordsRef.current = next;
       setWords(next);
     },
-    [config],
+    [maxWords],
   );
+
+  const reassignWordAi = useCallback((wordId: number) => {
+    const bots = playersRef.current.filter(
+      (player) => player.active && !player.isUser && player.health > 0,
+    );
+    if (!bots.length) return;
+    const bot = bots[Math.floor(Math.random() * bots.length)];
+    const now = Date.now();
+    const timing = createAiTiming(bot, wordsRef.current.find((word) => word.id === wordId)?.text ?? "snow", now);
+    const next = wordsRef.current.map((word) =>
+      word.id === wordId
+        ? {
+            ...word,
+            aiPlayerId: bot.id,
+            aiTeam: bot.team,
+            aiStartedAt: timing.startedAt,
+            claimAt: timing.claimAt,
+            aiProgress: 0,
+          }
+        : word,
+    );
+    wordsRef.current = next;
+    setWords(next);
+  }, []);
 
   const startMatch = useCallback(() => {
     clearPendingTimers();
-    const cleanPlayers = BASE_PLAYERS.map((player) => ({
+    const cleanPlayers = players.map((player) => ({
       ...player,
       name: player.id === "you" ? playerName.trim() || "小雪球" : player.name,
+      health: player.maxHealth,
       claims: 0,
       damage: 0,
     }));
@@ -679,12 +1036,7 @@ export default function SnowballGame() {
     setCatchEffects([]);
     setCharacterActions(createIdleActions());
     actorAvailableAtRef.current = {};
-    targetCursorRef.current = { pine: 0, berry: 0 };
     lockedWordsRef.current.clear();
-    pineHealthRef.current = MAX_HEALTH;
-    berryHealthRef.current = MAX_HEALTH;
-    setPineHealth(MAX_HEALTH);
-    setBerryHealth(MAX_HEALTH);
     comboRef.current = 0;
     lastClaimRef.current = 0;
     setCombo(0);
@@ -693,13 +1045,14 @@ export default function SnowballGame() {
     setWrongKeys(0);
     setElapsed(0);
     setWinner(null);
+    typedRef.current = "";
     setTyped("");
     setInputError(false);
     setCountdown(3);
-    setAnnouncement("准备好了吗？");
+    setAnnouncement("前排挡住，后排准备输出！");
     gameStartedAtRef.current = 0;
     setGameStage("countdown");
-  }, [clearPendingTimers, playerName, setGameStage]);
+  }, [clearPendingTimers, playerName, players, setGameStage]);
 
   const returnToLobby = useCallback(() => {
     clearPendingTimers();
@@ -709,8 +1062,12 @@ export default function SnowballGame() {
     setCatchEffects([]);
     setCharacterActions(createIdleActions());
     actorAvailableAtRef.current = {};
+    typedRef.current = "";
     setTyped("");
     setWinner(null);
+    const healed = playersRef.current.map((player) => ({ ...player, health: player.maxHealth }));
+    playersRef.current = healed;
+    setPlayers(healed);
     setGameStage("lobby");
     setAnnouncement("等待开战");
   }, [clearPendingTimers, setGameStage]);
@@ -724,36 +1081,50 @@ export default function SnowballGame() {
   }, [players]);
 
   useEffect(() => {
-    if (stage !== "countdown") return;
-    if (countdown <= 0) {
-      const initialWords: SnowWord[] = [];
-      wordsRef.current = initialWords;
-      for (let index = 0; index < 5; index += 1) spawnWord(10 + index * 10);
-      gameStartedAtRef.current = Date.now();
-      setAnnouncement("开战！先把单词打出来");
-      setGameStage("playing");
-      return;
-    }
-    const timer = window.setTimeout(() => setCountdown((value) => value - 1), 720);
-    return () => window.clearTimeout(timer);
-  }, [countdown, setGameStage, spawnWord, stage]);
+    typedRef.current = typed;
+  }, [typed]);
 
   useEffect(() => {
-    if (stage === "playing") {
-      window.setTimeout(() => inputRef.current?.focus(), 30);
-    }
-  }, [stage]);
+    if (stage !== "playing") return;
+    const staleWords = wordsRef.current.filter((word) => {
+      const racer = playersRef.current.find((player) => player.id === word.aiPlayerId);
+      return !racer || !racer.active || racer.health <= 0;
+    });
+    staleWords.forEach((word) => reassignWordAi(word.id));
+  }, [players, reassignWordAi, stage]);
+
+  useEffect(() => {
+    if (stage !== "countdown") return;
+    const timer = window.setTimeout(() => {
+      if (countdown <= 0) {
+        wordsRef.current = [];
+        for (let index = 0; index < Math.min(5, maxWords); index += 1) spawnWord(8 + index * 9);
+        gameStartedAtRef.current = Date.now();
+        setAnnouncement("开战！只输入英文单词");
+        setGameStage("playing");
+        return;
+      }
+      setCountdown((value) => value - 1);
+    }, countdown <= 0 ? 0 : 720);
+    return () => window.clearTimeout(timer);
+  }, [countdown, maxWords, setGameStage, spawnWord, stage]);
+
+  useEffect(() => {
+    if (stage === "playing" && userAlive) window.setTimeout(() => inputRef.current?.focus(), 30);
+  }, [stage, userAlive]);
 
   useEffect(() => {
     const fallTimer = window.setInterval(() => {
       if (stageRef.current !== "playing") return;
-      const next = wordsRef.current
-        .map((word) => ({ ...word, y: word.y + word.speed * 0.055 }))
-        .filter((word) => word.y < 78);
-      if (next.length !== wordsRef.current.length && typed) {
-        const hasMatch = next.some((word) => word.text.startsWith(typed));
-        if (!hasMatch) setTyped("");
-      }
+      const now = Date.now();
+      const next = wordsRef.current.map((word) => ({
+        ...word,
+        y: Math.min(word.restY, word.y + word.speed * 0.055),
+        aiProgress:
+          now < word.aiStartedAt
+            ? 0
+            : clamp((now - word.aiStartedAt) / Math.max(1, word.claimAt - word.aiStartedAt), 0, 1),
+      }));
       wordsRef.current = next;
       setWords(next);
     }, 55);
@@ -763,13 +1134,16 @@ export default function SnowballGame() {
       const now = Date.now();
       const due = wordsRef.current
         .filter((word) => word.claimAt <= now)
-        .sort((a, b) => a.claimAt - b.claimAt);
-      if (due[0]) claimWord(due[0].id, due[0].aiPlayerId);
+        .sort((a, b) => a.claimAt - b.claimAt)[0];
+      if (!due) return;
+      const bot = playersRef.current.find((player) => player.id === due.aiPlayerId);
+      if (!bot || !bot.active || bot.health <= 0) reassignWordAi(due.id);
+      else claimWord(due.id, bot.id);
     }, 80);
 
     const spawnTimer = window.setInterval(() => {
       if (stageRef.current === "playing") spawnWord();
-    }, config.spawnEvery);
+    }, spawnEvery);
 
     const clockTimer = window.setInterval(() => {
       if (stageRef.current !== "playing" || !gameStartedAtRef.current) return;
@@ -786,55 +1160,53 @@ export default function SnowballGame() {
       window.clearInterval(spawnTimer);
       window.clearInterval(clockTimer);
     };
-  }, [claimWord, config.spawnEvery, spawnWord, typed]);
+  }, [claimWord, reassignWordAi, spawnEvery, spawnWord]);
 
   useEffect(() => {
     const handleVisibility = () => {
       if (document.hidden && stageRef.current === "playing") {
+        pausedAtRef.current = Date.now();
+        pausePendingTimers();
         setGameStage("paused");
         setAnnouncement("离开页面，已自动暂停");
       }
     };
     document.addEventListener("visibilitychange", handleVisibility);
     return () => document.removeEventListener("visibilitychange", handleVisibility);
-  }, [setGameStage]);
+  }, [pausePendingTimers, setGameStage]);
 
   useEffect(
     () => () => {
-      timersRef.current.forEach((timer) => window.clearTimeout(timer));
+      timersRef.current.forEach((timer) => window.clearTimeout(timer.id));
     },
     [],
   );
 
   const handleInput = (event: ChangeEvent<HTMLInputElement>) => {
-    if (stageRef.current !== "playing") return;
-    const nextValue = event.target.value
-      .toLowerCase()
-      .replace(/[^a-z\u4e00-\u9fff]/g, "")
-      .slice(0, 10);
+    if (stageRef.current !== "playing" || !userAlive) return;
+    const nextValue = event.target.value.toLowerCase().replace(/[^a-z]/g, "").slice(0, 14);
     if (!nextValue) {
+      typedRef.current = "";
       setTyped("");
       setInputError(false);
       return;
     }
-
-    const matches = wordsRef.current.filter((word) =>
-      word.text.toLowerCase().startsWith(nextValue),
-    );
+    const matches = wordsRef.current.filter((word) => word.text.startsWith(nextValue));
     if (!matches.length) {
       setInputError(true);
       setWrongKeys((value) => value + 1);
       comboRef.current = 0;
       setCombo(0);
-      rememberTimer(window.setTimeout(() => setInputError(false), 260));
+      scheduleTimer(() => setInputError(false), 260);
       return;
     }
-
+    typedRef.current = nextValue;
     setTyped(nextValue);
     setInputError(false);
     if (nextValue.length > typed.length) setCorrectKeys((value) => value + 1);
-    const exact = matches.find((word) => word.text.toLowerCase() === nextValue);
+    const exact = matches.find((word) => word.text === nextValue);
     if (exact) {
+      typedRef.current = "";
       setTyped("");
       claimWord(exact.id, "you");
     }
@@ -843,15 +1215,30 @@ export default function SnowballGame() {
   const handleInputKeyDown = (event: KeyboardEvent<HTMLInputElement>) => {
     if (event.key === "Escape" || event.key === " ") {
       event.preventDefault();
+      typedRef.current = "";
       setTyped("");
       setInputError(false);
     }
   };
 
   const resume = () => {
-    gameStartedAtRef.current = Date.now() - elapsed * 1000;
+    const pauseDuration = pausedAtRef.current ? Date.now() - pausedAtRef.current : 0;
+    if (pauseDuration > 0) {
+      const shiftedWords = wordsRef.current.map((word) => ({
+        ...word,
+        bornAt: word.bornAt + pauseDuration,
+        aiStartedAt: word.aiStartedAt + pauseDuration,
+        claimAt: word.claimAt + pauseDuration,
+      }));
+      wordsRef.current = shiftedWords;
+      setWords(shiftedWords);
+      gameStartedAtRef.current += pauseDuration;
+      if (lastClaimRef.current > 0) lastClaimRef.current += pauseDuration;
+    }
+    pausedAtRef.current = 0;
     setGameStage("playing");
-    setAnnouncement("继续抢雪花！");
+    resumePendingTimers();
+    setAnnouncement(userAlive ? "继续抢英文单词！" : "你已出局，AI 队友继续作战");
   };
 
   return (
@@ -875,75 +1262,91 @@ export default function SnowballGame() {
       {stage === "lobby" ? (
         <section className="lobby" aria-labelledby="game-title">
           <div className="lobby__story">
-            <p className="eyebrow"><span /> 童年打字小游戏重制</p>
-            <h1 id="game-title">
-              河岸那边，<br />
-              <em>开打雪仗！</em>
-            </h1>
+            <p className="eyebrow"><span /> SNOWCRAFT-INSPIRED TACTICAL REMAKE</p>
+            <h1 id="game-title">排好阵型，<br /><em>开打雪仗！</em></h1>
             <p className="lobby__lead">
-              雪花里藏着单词。谁先打出来，谁就能把它攥成雪球，越过冰河砸向对岸。
+              全英文单词竞速。肉盾站前排替队友吃伤害，快手躲在后排持续抢词输出。
             </p>
 
             <div className="rule-strip" aria-label="游戏规则">
-              <span><b>01</b> 看准飘落单词</span>
-              <span><b>02</b> 完整输入抢雪花</span>
-              <span><b>03</b> 先打空对方血量</span>
+              <span><b>01</b> 英文雪花永久停留</span>
+              <span><b>02</b> 永远攻击最前排</span>
+              <span><b>03</b> 全员出局才算输</span>
             </div>
 
-            <div className="lobby__controls">
+            <div className="lobby__controls lobby__controls--formation">
               <label>
                 <span>你的名字</span>
-                <input
-                  value={playerName}
-                  maxLength={8}
-                  onChange={(event) => setPlayerName(event.target.value)}
-                  aria-label="你的名字"
-                />
+                <input value={playerName} maxLength={8} onChange={(event) => setPlayerName(event.target.value)} aria-label="你的名字" />
               </label>
               <label>
-                <span>对战难度</span>
-                <select
-                  value={difficulty}
-                  onChange={(event) => setDifficulty(event.target.value as Difficulty)}
-                  aria-label="对战难度"
-                >
-                  {Object.entries(DIFFICULTIES).map(([value, item]) => (
-                    <option key={value} value={value}>{item.label}</option>
-                  ))}
+                <span>雪松队人数</span>
+                <select value={pinePlayers.length} onChange={(event) => changeTeamSize("pine", Number(event.target.value))} aria-label="雪松队人数">
+                  {[1, 2, 3, 4].map((count) => <option key={count} value={count}>{count} 人</option>)}
+                </select>
+              </label>
+              <label>
+                <span>红莓队人数</span>
+                <select value={berryPlayers.length} onChange={(event) => changeTeamSize("berry", Number(event.target.value))} aria-label="红莓队人数">
+                  {[1, 2, 3, 4].map((count) => <option key={count} value={count}>{count} 人</option>)}
                 </select>
               </label>
             </div>
-            <p className="difficulty-note">{config.note}</p>
+
+            <div className="formation-tip">
+              <strong>阵型提示</strong>
+              <span>卡片从上到下就是前排到后排；用“前 / 后”按钮换位。</span>
+            </div>
 
             <button className="primary-button" onClick={startMatch}>
-              <span>加入雪松队</span>
-              <strong>开始对战 →</strong>
+              <span>{pinePlayers.length} VS {berryPlayers.length} · AI 战术演练</span>
+              <strong>按阵型开战 →</strong>
             </button>
-            <p className="local-note">本机试玩 · 1 位玩家 + 7 位雪友 AI · 共 8 人</p>
+            <p className="local-note">
+              本机模式 · 1 位真人 + {pinePlayers.length + berryPlayers.length - 1} 位可调强度 AI
+            </p>
           </div>
 
           <div className="lobby__room">
-            <div className="room-card">
+            <div className="room-card room-card--formation">
               <div className="room-card__top">
-                <span><i /> 房间已满</span>
-                <strong>4 VS 4</strong>
-                <small>雪桥镇 · 01号河岸</small>
+                <span><i /> 阵型编辑中</span>
+                <strong>{pinePlayers.length} VS {berryPlayers.length}</strong>
+                <small>不要求双方人数相等</small>
               </div>
               <div className="room-vs">
                 <section>
-                  <header><TeamMark team="pine" /> 雪松队 <b>4/4</b></header>
-                  {pinePlayers.map((player) => <RosterCard key={player.id} player={player} />)}
+                  <header><TeamMark team="pine" /> 雪松队 <b>{pinePlayers.length}/4</b></header>
+                  {pinePlayers.map((player, index) => (
+                    <RosterCard
+                      key={player.id}
+                      player={player}
+                      index={index}
+                      total={pinePlayers.length}
+                      onMove={(direction) => movePlayer(player.id, direction)}
+                      onLevelChange={(level) => changeAiLevel(player.id, level)}
+                    />
+                  ))}
                 </section>
                 <div className="room-vs__river"><span>VS</span></div>
                 <section>
-                  <header><TeamMark team="berry" /> 红莓队 <b>4/4</b></header>
-                  {berryPlayers.map((player) => <RosterCard key={player.id} player={player} />)}
+                  <header><TeamMark team="berry" /> 红莓队 <b>{berryPlayers.length}/4</b></header>
+                  {berryPlayers.map((player, index) => (
+                    <RosterCard
+                      key={player.id}
+                      player={player}
+                      index={index}
+                      total={berryPlayers.length}
+                      onMove={(direction) => movePlayer(player.id, direction)}
+                      onLevelChange={(level) => changeAiLevel(player.id, level)}
+                    />
+                  ))}
                 </section>
               </div>
               <div className="room-card__footer">
-                <span>◉ 共享血量</span>
-                <span>⌨ 输入即出手</span>
-                <span>❄ 长词伤害更高</span>
+                <span>🛡 前排挡伤</span>
+                <span>⌨ 全英文输入</span>
+                <span>⚙ 每个 AI 独立强度</span>
               </div>
             </div>
           </div>
@@ -951,43 +1354,46 @@ export default function SnowballGame() {
       ) : (
         <section className="match" aria-label="雪仗对战">
           <header className="match-header">
-            <button className="brand-button" onClick={returnToLobby} aria-label="返回房间">
+            <button className="brand-button" onClick={returnToLobby} aria-label="返回阵型房间">
               <span className="brand-button__flake">✦</span>
               <span><strong>河岸雪仗</strong><small>SNOW TYPE BATTLE</small></span>
             </button>
             <div className="match-header__status">
               <span>{stage === "playing" ? "对战进行中" : stage === "countdown" ? "即将开战" : stage === "paused" ? "暂停中" : "本局结束"}</span>
               <b>{formatClock(elapsed)}</b>
-              <small>{config.label} · 4v4</small>
+              <small>{pinePlayers.length}v{berryPlayers.length} · 前排锁定</small>
             </div>
             <button
               className="paper-button"
-              onClick={() => (stage === "paused" ? resume() : setGameStage("paused"))}
+              onClick={() => {
+                if (stage === "paused") resume();
+                else {
+                  pausedAtRef.current = Date.now();
+                  pausePendingTimers();
+                  setGameStage("paused");
+                }
+              }}
               disabled={stage === "countdown" || stage === "ended"}
             >
               {stage === "paused" ? "继续" : "暂停"}
             </button>
           </header>
 
-          <div className="scoreboard">
+          <div className="scoreboard scoreboard--individual">
             <section className="team-score team-score--pine">
               <div className="team-score__label">
-                <span><TeamMark team="pine" /><b>雪松队</b><small>{pinePlayers.map((player) => player.badge).join(" · ")}</small></span>
-                <strong>{pineHealth}<i>/ {MAX_HEALTH}</i></strong>
+                <span><TeamMark team="pine" /><b>雪松队</b><small>盾牌标记 = 当前前排</small></span>
+                <strong>{pineAlive}<i>/ {pinePlayers.length} 存活</i></strong>
               </div>
-              <div className="health-track" role="progressbar" aria-label="雪松队血量" aria-valuenow={pineHealth} aria-valuemin={0} aria-valuemax={MAX_HEALTH}>
-                <i style={{ width: `${(pineHealth / MAX_HEALTH) * 100}%` }} />
-              </div>
+              <TeamHealthRows players={pinePlayers} team="pine" frontlineId={pineFrontlineId} />
             </section>
-            <div className="scoreboard__badge"><span>跨河</span><strong>VS</strong><small>雪仗</small></div>
+            <div className="scoreboard__badge"><span>前排</span><strong>VS</strong><small>锁定</small></div>
             <section className="team-score team-score--berry">
               <div className="team-score__label">
-                <span><TeamMark team="berry" /><b>红莓队</b><small>{berryPlayers.map((player) => player.badge).join(" · ")}</small></span>
-                <strong>{berryHealth}<i>/ {MAX_HEALTH}</i></strong>
+                <span><TeamMark team="berry" /><b>红莓队</b><small>倒下后自动切换下一位</small></span>
+                <strong>{berryAlive}<i>/ {berryPlayers.length} 存活</i></strong>
               </div>
-              <div className="health-track" role="progressbar" aria-label="红莓队血量" aria-valuenow={berryHealth} aria-valuemin={0} aria-valuemax={MAX_HEALTH}>
-                <i style={{ width: `${(berryHealth / MAX_HEALTH) * 100}%` }} />
-              </div>
+              <TeamHealthRows players={berryPlayers} team="berry" frontlineId={berryFrontlineId} />
             </section>
           </div>
 
@@ -1010,7 +1416,8 @@ export default function SnowballGame() {
                   key={player.id}
                   player={player}
                   action={characterActions[player.id] ?? { phase: "idle", token: 0 }}
-                  finale={stage === "ended" ? (winner === "pine" ? "cheer" : "defeat") : undefined}
+                  isFront={player.id === pineFrontlineId}
+                  finale={player.health <= 0 ? "defeat" : stage === "ended" ? (winner === "pine" ? "cheer" : "defeat") : undefined}
                   nodeRef={(node) => {
                     if (node) kidNodesRef.current.set(player.id, node);
                     else kidNodesRef.current.delete(player.id);
@@ -1024,7 +1431,8 @@ export default function SnowballGame() {
                   key={player.id}
                   player={player}
                   action={characterActions[player.id] ?? { phase: "idle", token: 0 }}
-                  finale={stage === "ended" ? (winner === "berry" ? "cheer" : "defeat") : undefined}
+                  isFront={player.id === berryFrontlineId}
+                  finale={player.health <= 0 ? "defeat" : stage === "ended" ? (winner === "berry" ? "cheer" : "defeat") : undefined}
                   nodeRef={(node) => {
                     if (node) kidNodesRef.current.set(player.id, node);
                     else kidNodesRef.current.delete(player.id);
@@ -1033,10 +1441,19 @@ export default function SnowballGame() {
               ))}
             </div>
 
-            <div className="word-field" aria-label="飘落的单词">
+            <div className="word-field" aria-label="不会自动消失的英文单词雪花">
               {words.map((word) => {
-                const matchLength = typed && word.text.toLowerCase().startsWith(typed.toLowerCase()) ? typed.length : 0;
-                const claimDuration = Math.max(400, word.claimAt - word.bornAt);
+                const matchLength = typed && word.text.startsWith(typed) ? typed.length : 0;
+                const racer = players.find((player) => player.id === word.aiPlayerId);
+                const aiProgress = word.aiProgress;
+                const playerProgress = matchLength / word.text.length;
+                const raceState =
+                  playerProgress > aiProgress
+                    ? "leading"
+                    : aiProgress > 0 || playerProgress > 0
+                      ? "contested"
+                      : "idle";
+                const visibleProgress = Math.max(playerProgress, aiProgress);
                 return (
                   <div
                     key={word.id}
@@ -1044,22 +1461,27 @@ export default function SnowballGame() {
                       if (node) wordNodesRef.current.set(word.id, node);
                       else wordNodesRef.current.delete(word.id);
                     }}
-                    className={`snow-word snow-word--${word.aiTeam}${matchLength ? " is-matching" : ""}${focusedWordId === word.id ? " is-focused" : ""}`}
+                    className={`snow-word snow-word--${word.aiTeam} is-${raceState}${focusedWordId === word.id ? " is-focused" : ""}${word.y >= word.restY - 0.1 ? " is-resting" : ""}`}
                     style={
                       {
                         left: `${word.x}%`,
                         top: `${word.y}%`,
                         "--word-drift": `${word.drift}px`,
-                        "--claim-duration": `${claimDuration}ms`,
+                        "--race-progress": visibleProgress,
                       } as CSSProperties
                     }
                   >
                     <div className="snow-word__sway">
                       <span className="snow-word__flake" aria-hidden="true">❄</span>
-                      <strong>
-                        <b>{word.text.slice(0, matchLength)}</b>{word.text.slice(matchLength)}
-                      </strong>
-                      <i aria-hidden="true" />
+                      <strong><b>{word.text.slice(0, matchLength)}</b>{word.text.slice(matchLength)}</strong>
+                      <i aria-hidden="true"><span style={{ width: `${visibleProgress * 100}%` }} /></i>
+                      <small className="snow-word__state">
+                        {raceState === "leading"
+                          ? "YOU'RE FASTEST"
+                          : raceState === "contested"
+                            ? `${racer?.name ?? "AI"} TYPING`
+                            : "OPEN"}
+                      </small>
                     </div>
                   </div>
                 );
@@ -1108,9 +1530,9 @@ export default function SnowballGame() {
 
             {(stage === "countdown" || stage === "paused" || stage === "ended") && (
               <div className="arena-overlay">
-                {stage === "countdown" && <><small>戴好手套</small><strong>{countdown || "GO!"}</strong><p>手放到键盘上</p></>}
-                {stage === "paused" && <><small>雪球先放下</small><strong>暂停</strong><p>准备好了再继续</p><button onClick={resume}>继续对战</button></>}
-                {stage === "ended" && <><small>{winner === "pine" ? "守住河岸！" : "对岸攻过来了"}</small><strong>{winner === "pine" ? "胜利" : "再战"}</strong><p>最佳连击 ×{bestCombo} · 准确率 {accuracy}%</p><div><button onClick={startMatch}>再来一局</button><button className="ghost" onClick={returnToLobby}>回到房间</button></div></>}
+                {stage === "countdown" && <><small>前排举盾</small><strong>{countdown || "GO!"}</strong><p>手放到英文键盘上</p></>}
+                {stage === "paused" && <><small>雪球先放下</small><strong>暂停</strong><p>AI 进度也已暂停</p><button onClick={resume}>继续对战</button></>}
+                {stage === "ended" && <><small>{winner === "pine" ? "守住河岸！" : "防线被突破"}</small><strong>{winner === "pine" ? "胜利" : "再战"}</strong><p>最佳连击 ×{bestCombo} · 准确率 {accuracy}%</p><div><button onClick={startMatch}>同阵型再来</button><button className="ghost" onClick={returnToLobby}>重排阵型</button></div></>}
               </div>
             )}
           </div>
@@ -1122,25 +1544,32 @@ export default function SnowballGame() {
               <span>最高 {bestCombo}</span>
             </div>
             <label className={`type-box${inputError ? " is-error" : ""}${typed ? " has-text" : ""}`}>
-              <span className="type-box__hint">输入飘落的单词，抢先抓住它</span>
+              <span className="type-box__hint">
+                {userAlive ? "只输入英文；绿色表示你当前领先" : "你已出局，AI 队友仍会继续战斗"}
+              </span>
               <div className="type-box__line">
-                <span className="type-box__prompt">⌨</span>
+                <span className="type-box__prompt">EN</span>
                 <input
                   ref={inputRef}
                   value={typed}
                   onChange={handleInput}
                   onKeyDown={handleInputKeyDown}
-                  disabled={stage !== "playing"}
-                  placeholder={stage === "playing" ? "直接打字…" : "等待开战"}
+                  disabled={stage !== "playing" || !userAlive}
+                  placeholder={userAlive ? "type an English word…" : "you are out"}
+                  lang="en"
+                  inputMode="text"
                   autoCapitalize="none"
                   autoComplete="off"
+                  autoCorrect="off"
                   spellCheck={false}
-                  aria-label="单词输入框"
+                  aria-label="英文单词输入框"
                   onPaste={(event) => event.preventDefault()}
                 />
-                <span className="type-box__clear">空格清空</span>
+                <span className="type-box__clear">SPACE 清空</span>
               </div>
-              <span className="type-box__message" aria-live="polite">{inputError ? "这个开头没有雪花，再看一眼" : announcement}</span>
+              <span className="type-box__message" aria-live="polite">
+                {inputError ? "没有这个英文开头，再看一眼" : announcement}
+              </span>
             </label>
             <div className="stat-card stat-card--right">
               <small>输入准确率</small>
@@ -1152,7 +1581,7 @@ export default function SnowballGame() {
       )}
 
       <div className="sr-only" aria-live="assertive">
-        雪松队剩余 {pineHealth} 点血量，红莓队剩余 {berryHealth} 点血量。
+        雪松队还有 {pineAlive} 人，红莓队还有 {berryAlive} 人。
       </div>
     </main>
   );

@@ -6,7 +6,7 @@ export const metadata: Metadata = {
     default: "河岸雪仗",
     template: "%s · 河岸雪仗",
   },
-  description: "一场隔着冰河、靠打字抢雪花的童年 4v4 雪仗。",
+  description: "一场隔着冰河、靠英文打字抢雪花的可变阵容战术雪仗。",
 };
 
 export default function RootLayout({
