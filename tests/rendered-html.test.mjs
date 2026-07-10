@@ -31,6 +31,7 @@ test("server-renders the snow fighting game", async () => {
   assert.match(html, /<title>河岸雪仗/);
   assert.match(html, /SNOWCRAFT-INSPIRED TACTICAL REMAKE/);
   assert.match(html, /全英文单词竞速/);
+  assert.match(html, /好友联机/);
   assert.match(html, /按阵型开战/);
   assert.match(html, /3(?:<!-- -->)? VS (?:<!-- -->)?3/);
   assert.match(html, /1 位真人 \+ (?:<!-- -->)?5(?:<!-- -->)? 位可调强度 AI/);

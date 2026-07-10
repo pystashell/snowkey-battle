@@ -10,13 +10,24 @@ import {
   useRef,
   useState,
 } from "react";
+import { OnlineLobby } from "./OnlineLobby";
+import { useRoomSocket } from "./useRoomSocket";
 import { WORD_BOOKS, WORD_BOOK_OPTIONS, type WordbookId } from "./wordbooks";
+import {
+  isRoomCode,
+  sanitizeRoomCode,
+  type RoomEvent,
+  type RoomPlayer,
+  type RoomSnapshot,
+  type RoomWord,
+} from "../shared/game-protocol";
 
 type Team = "pine" | "berry";
 type Stage = "lobby" | "countdown" | "playing" | "paused" | "ended";
 type AiLevel = "rookie" | "steady" | "expert";
 type PlayerRole = "tank" | "balanced" | "striker";
 type SnowfallLevel = "light" | "classic" | "blizzard";
+type GameMode = "local" | "online";
 
 type Player = {
   id: string;
@@ -33,6 +44,9 @@ type Player = {
   maxHealth: number;
   claims: number;
   damage: number;
+  controllerKind?: "human" | "ai";
+  connected?: boolean;
+  ready?: boolean;
 };
 
 type SnowWord = {
@@ -44,11 +58,11 @@ type SnowWord = {
   speed: number;
   drift: number;
   bornAt: number;
-  aiStartedAt: number;
-  claimAt: number;
+  aiStartedAt: number | null;
+  claimAt: number | null;
   aiProgress: number;
-  aiTeam: Team;
-  aiPlayerId: string;
+  aiTeam: Team | null;
+  aiPlayerId: string | null;
 };
 
 type Projectile = {
@@ -342,10 +356,70 @@ function createInitialPlayers(pineCount = 3, berryCount = 3): Player[] {
   });
 }
 
-function createIdleActions(): Record<string, CharacterAction> {
+function createIdleActions(playerIds = PLAYER_SEEDS.map((player) => player.id)): Record<string, CharacterAction> {
   return Object.fromEntries(
-    PLAYER_SEEDS.map((player) => [player.id, { phase: "idle", token: 0 }]),
+    playerIds.map((playerId) => [playerId, { phase: "idle", token: 0 }]),
   ) as Record<string, CharacterAction>;
+}
+
+function getPlayerPalette(player: Pick<Player, "id" | "team" | "position">) {
+  const seedIndex = PLAYER_SEEDS.findIndex((item) => item.id === player.id);
+  const fallbackIndex = player.team === "pine" ? player.position : 4 + player.position;
+  return KID_PALETTES[seedIndex >= 0 ? seedIndex : fallbackIndex % KID_PALETTES.length];
+}
+
+function mapRoomPlayer(player: RoomPlayer, selfPlayerId: string | null): Player {
+  return {
+    id: player.id,
+    name: player.name,
+    team: player.team,
+    badge: player.badge,
+    slot: player.position,
+    position: player.position,
+    role: player.role,
+    isUser: player.id === selfPlayerId,
+    active: true,
+    aiLevel: player.controller.kind === "ai" ? player.controller.level : undefined,
+    health: player.health,
+    maxHealth: player.maxHealth,
+    claims: player.claims,
+    damage: player.damage,
+    controllerKind: player.controller.kind,
+    connected: player.controller.kind === "human" ? player.controller.connected : true,
+    ready: player.controller.kind === "human" ? player.controller.ready : true,
+  };
+}
+
+function mapRoomWord(word: RoomWord, snapshot: RoomSnapshot, serverTimeOffsetMs: number): SnowWord {
+  const bornAt = word.bornAt - serverTimeOffsetMs;
+  const aiStartedAt = word.aiStartedAt === null ? null : word.aiStartedAt - serverTimeOffsetMs;
+  const claimAt = word.aiClaimAt === null ? null : word.aiClaimAt - serverTimeOffsetMs;
+  const elapsedSeconds = Math.max(0, Date.now() - bornAt) / 1000;
+  const aiPlayer = word.aiPlayerId
+    ? snapshot.players.find((player) => player.id === word.aiPlayerId) ?? null
+    : null;
+  const aiProgress = word.aiStartedAt === null || word.aiClaimAt === null
+    ? 0
+    : clamp(
+        (snapshot.serverTime - word.aiStartedAt) / Math.max(1, word.aiClaimAt - word.aiStartedAt),
+        0,
+        1,
+      );
+  return {
+    id: word.id,
+    text: word.text,
+    x: word.x,
+    y: Math.min(word.restY, 7 + word.speed * elapsedSeconds),
+    restY: word.restY,
+    speed: word.speed,
+    drift: word.drift,
+    bornAt,
+    aiStartedAt,
+    claimAt,
+    aiProgress,
+    aiTeam: aiPlayer?.team ?? null,
+    aiPlayerId: word.aiPlayerId,
+  };
 }
 
 function getActorAnchor(player: Player): ActorAnchor {
@@ -399,8 +473,7 @@ function Kid({
   nodeRef?: (node: HTMLDivElement | null) => void;
 }) {
   const phase = action.phase === "hit" ? "hit" : finale ?? action.phase;
-  const paletteIndex = Math.max(0, PLAYER_SEEDS.findIndex((item) => item.id === player.id));
-  const palette = KID_PALETTES[paletteIndex];
+  const palette = getPlayerPalette(player);
   const actionLabel: Partial<Record<CharacterPhase, string>> = {
     catch: "抓住！",
     hold: "捏雪球…",
@@ -475,8 +548,7 @@ function RosterCard({
   onMove: (direction: -1 | 1) => void;
   onLevelChange: (level: AiLevel) => void;
 }) {
-  const paletteIndex = Math.max(0, PLAYER_SEEDS.findIndex((item) => item.id === player.id));
-  const palette = KID_PALETTES[paletteIndex];
+  const palette = getPlayerPalette(player);
   return (
     <div className={`roster-card roster-card--${player.team}${player.isUser ? " is-you" : ""}`}>
       <span
@@ -548,8 +620,10 @@ function TeamHealthRows({
 }
 
 export default function SnowballGame() {
+  const [gameMode, setGameMode] = useState<GameMode>("local");
   const [stage, setStage] = useState<Stage>("lobby");
   const [playerName, setPlayerName] = useState("小雪球");
+  const [roomCodeInput, setRoomCodeInput] = useState("");
   const [wordbookId, setWordbookId] = useState<WordbookId>("winter");
   const [snowfallLevel, setSnowfallLevel] = useState<SnowfallLevel>("classic");
   const [players, setPlayers] = useState<Player[]>(() => createInitialPlayers());
@@ -569,6 +643,7 @@ export default function SnowballGame() {
   const [winner, setWinner] = useState<Team | null>(null);
   const [inputError, setInputError] = useState(false);
   const [announcement, setAnnouncement] = useState("等待开战");
+  const room = useRoomSocket({ autoResume: true });
 
   const inputRef = useRef<HTMLInputElement>(null);
   const arenaRef = useRef<HTMLDivElement>(null);
@@ -590,13 +665,32 @@ export default function SnowballGame() {
   const timersRef = useRef<ManagedTimer[]>([]);
   const actorAvailableAtRef = useRef<Record<string, number>>({});
   const pausedAtRef = useRef(0);
+  const inviteHandledRef = useRef(false);
+  const handledRoomEventRef = useRef<RoomEvent | null>(null);
+  const onlinePhaseRef = useRef<RoomSnapshot["phase"] | null>(null);
+  const isOnline = gameMode === "online" || room.status !== "idle";
+  const onlineSnapshot = isOnline ? room.snapshot : null;
+  const onlineServerTimeOffsetMs = room.serverTimeOffsetMs;
+  const getOnlineServerNow = room.getServerNow;
+
+  useEffect(() => {
+    if (inviteHandledRef.current || typeof window === "undefined") return;
+    inviteHandledRef.current = true;
+    const invitedCode = sanitizeRoomCode(new URL(window.location.href).searchParams.get("room") ?? "");
+    if (!isRoomCode(invitedCode)) return;
+    const timer = window.setTimeout(() => {
+      setGameMode("online");
+      setRoomCodeInput(invitedCode);
+    }, 0);
+    return () => window.clearTimeout(timer);
+  }, []);
 
   const activePlayers = useMemo(
     () =>
       players
         .filter((player) => player.active)
         .map((player) =>
-          player.id === "you" ? { ...player, name: playerName.trim() || "小雪球" } : player,
+          player.isUser ? { ...player, name: playerName.trim() || "小雪球" } : player,
         ),
     [playerName, players],
   );
@@ -646,6 +740,86 @@ export default function SnowballGame() {
     targetWordIdRef.current = null;
     setTargetWordId(null);
   }, []);
+
+  useEffect(() => {
+    if (!isOnline || !onlineSnapshot) return;
+    const mappedPlayers = onlineSnapshot.players.map((player) =>
+      mapRoomPlayer(player, onlineSnapshot.selfPlayerId));
+    const mappedWords = onlineSnapshot.words.map((word) =>
+      mapRoomWord(word, onlineSnapshot, onlineServerTimeOffsetMs));
+    const selfPlayer = onlineSnapshot.players.find(
+      (player) => player.id === onlineSnapshot.selfPlayerId,
+    );
+    const selfTyping = onlineSnapshot.selfPlayerId
+      ? onlineSnapshot.typingByPlayer[onlineSnapshot.selfPlayerId]
+      : undefined;
+
+    playersRef.current = mappedPlayers;
+    // The WebSocket snapshot is an external authoritative store. Mirroring it
+    // into animation state here is intentional and cannot be derived lazily.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setPlayers(mappedPlayers);
+    wordsRef.current = mappedWords;
+    setWords(mappedWords);
+    setCharacterActions((current) => Object.fromEntries(
+      mappedPlayers.map((player) => [player.id, current[player.id] ?? { phase: "idle", token: 0 }]),
+    ) as Record<string, CharacterAction>);
+    setWordbookId(onlineSnapshot.config.wordbookId);
+    setSnowfallLevel(onlineSnapshot.config.snowfallLevel);
+    setWinner(onlineSnapshot.winner);
+    setCombo(selfPlayer?.combo ?? 0);
+    comboRef.current = selfPlayer?.combo ?? 0;
+    setBestCombo(selfPlayer?.bestCombo ?? 0);
+    const nextTyped = selfTyping?.buffer ?? "";
+    typedRef.current = nextTyped;
+    setTyped(nextTyped);
+    lockTargetWord(selfTyping?.targetWordId ?? null);
+
+    const nextStage: Stage = onlineSnapshot.phase === "lobby"
+      ? "lobby"
+      : onlineSnapshot.phase;
+    setGameStage(nextStage);
+    if (onlineSnapshot.startedAt !== null) {
+      gameStartedAtRef.current = onlineSnapshot.startedAt - onlineServerTimeOffsetMs;
+      setElapsed(Math.max(0, Math.floor(
+        (getOnlineServerNow() - onlineSnapshot.startedAt) / 1000,
+      )));
+    }
+    if (onlineSnapshot.countdownEndsAt !== null) {
+      setCountdown(Math.max(0, Math.ceil(
+        (onlineSnapshot.countdownEndsAt - getOnlineServerNow()) / 1000,
+      )));
+    }
+    if (onlinePhaseRef.current !== onlineSnapshot.phase) {
+      onlinePhaseRef.current = onlineSnapshot.phase;
+      setAnnouncement(
+        onlineSnapshot.phase === "lobby"
+          ? "等待所有真人准备"
+          : onlineSnapshot.phase === "countdown"
+            ? "房间已锁定，准备开战！"
+            : onlineSnapshot.phase === "ended"
+              ? "本局已经结束"
+              : "服务器实时裁定中",
+      );
+    }
+  }, [
+    getOnlineServerNow,
+    isOnline,
+    lockTargetWord,
+    onlineServerTimeOffsetMs,
+    onlineSnapshot,
+    setGameStage,
+  ]);
+
+  useEffect(() => {
+    if (!isOnline || onlineSnapshot?.phase !== "countdown" || onlineSnapshot.countdownEndsAt === null) return;
+    const updateCountdown = () => setCountdown(Math.max(0, Math.ceil(
+      (onlineSnapshot.countdownEndsAt! - getOnlineServerNow()) / 1000,
+    )));
+    updateCountdown();
+    const timer = window.setInterval(updateCountdown, 160);
+    return () => window.clearInterval(timer);
+  }, [getOnlineServerNow, isOnline, onlineSnapshot]);
 
   const scheduleTimer = useCallback((callback: () => void, delay: number) => {
     const remaining = Math.max(0, delay);
@@ -876,11 +1050,23 @@ export default function SnowballGame() {
   );
 
   const launchSnowball = useCallback(
-    (player: Player, word: SnowWord, damage: number) => {
+    (
+      player: Player,
+      word: SnowWord,
+      damage: number,
+      options?: { authoritative?: boolean; targetId?: string | null; startsInMs?: number },
+    ) => {
       const now = Date.now();
-      const startsAt = Math.max(now, actorAvailableAtRef.current[player.id] ?? now);
+      const requestedStart = now + Math.max(0, options?.startsInMs ?? 0);
+      const startsAt = Math.max(requestedStart, actorAvailableAtRef.current[player.id] ?? now);
       const queueDelay = startsAt - now;
       actorAvailableAtRef.current[player.id] = startsAt + 1850;
+      const canAnimate = (attacker: Player | undefined) =>
+        Boolean(
+          attacker
+          && (options?.authoritative || attacker.health > 0)
+          && (options?.authoritative || stageRef.current !== "ended"),
+        );
 
       const sourceFallback = getActorAnchor(player);
       const visibleWord = pointInArena(wordNodesRef.current.get(word.id)) ?? { x: word.x, y: word.y };
@@ -890,7 +1076,7 @@ export default function SnowballGame() {
 
       scheduleTimer(() => {
         const attacker = playersRef.current.find((candidate) => candidate.id === player.id);
-        if (stageRef.current === "ended" || !attacker || attacker.health <= 0) return;
+        if (!canAnimate(attacker)) return;
         const mitten = kidNodesRef.current
           .get(player.id)
           ?.querySelector<HTMLElement>(".kid__arm--front .kid__mitten") ?? undefined;
@@ -912,23 +1098,25 @@ export default function SnowballGame() {
       scheduleTimer(() => {
         setCatchEffects((current) => current.filter((effect) => effect.id !== catchId));
         const attacker = playersRef.current.find((candidate) => candidate.id === player.id);
-        if (stageRef.current !== "ended" && attacker && attacker.health > 0) {
+        if (canAnimate(attacker)) {
           setCharacterPose(player.id, "hold", word.text);
         }
       }, queueDelay + 410);
       scheduleTimer(() => {
         const attacker = playersRef.current.find((candidate) => candidate.id === player.id);
-        if (stageRef.current !== "ended" && attacker && attacker.health > 0) {
+        if (canAnimate(attacker)) {
           setCharacterPose(player.id, "windup", word.text);
         }
       }, queueDelay + 650);
       scheduleTimer(() => {
         const attacker = playersRef.current.find((candidate) => candidate.id === player.id);
-        if (stageRef.current === "ended" || !attacker || attacker.health <= 0) return;
+        if (!attacker || !canAnimate(attacker)) return;
         const targets = playersRef.current
           .filter((candidate) => candidate.active && candidate.team !== player.team && candidate.health > 0)
           .sort((a, b) => a.position - b.position);
-        const target = targets[0];
+        const target = options?.targetId
+          ? playersRef.current.find((candidate) => candidate.id === options.targetId) ?? targets[0]
+          : targets[0];
         if (!target) return;
         const freshSourceFallback = getActorAnchor(attacker);
         const targetFallback = getActorAnchor(target);
@@ -964,14 +1152,14 @@ export default function SnowballGame() {
         setProjectiles((current) => [...current, projectile]);
         scheduleTimer(() => {
           setProjectiles((current) => current.filter((item) => item.id !== projectileId));
-          if (stageRef.current === "ended") return;
+          if (!options?.authoritative && stageRef.current === "ended") return;
           const currentTarget = playersRef.current.find((candidate) => candidate.id === target.id);
-          if (!currentTarget || currentTarget.health <= 0) {
+          if (!currentTarget || (!options?.authoritative && currentTarget.health <= 0)) {
             say(`${word.text} 落在了空雪地上`);
             return;
           }
           const hitToken = setCharacterPose(target.id, "hit");
-          applyDamage(attacker.id, target.id, damage);
+          if (!options?.authoritative) applyDamage(attacker.id, target.id, damage);
           scheduleTimer(() => settleCharacterPose(target.id, "hit", hitToken), 620);
         }, 610);
       }, queueDelay + 900);
@@ -1023,6 +1211,53 @@ export default function SnowballGame() {
     },
     [clearTargetWord, launchSnowball, registerClaim, say],
   );
+
+  useEffect(() => {
+    const event: RoomEvent | null = isOnline ? room.lastEvent : null;
+    if (!event || !onlineSnapshot) return;
+    if (handledRoomEventRef.current === event) return;
+    handledRoomEventRef.current = event;
+    if (event.type === "word.claimed") {
+      const attacker = playersRef.current.find((player) => player.id === event.attackerId);
+      if (!attacker) return;
+      const claimedWord = mapRoomWord(event.word, onlineSnapshot, onlineServerTimeOffsetMs);
+      launchSnowball(attacker, claimedWord, event.damage, {
+        authoritative: true,
+        startsInMs: Math.max(0, event.startsAt - getOnlineServerNow()),
+      });
+      setAnnouncement(
+        attacker.isUser
+          ? `${event.word.text} — 服务器确认你最快！`
+          : `${attacker.name} 抢走了 ${event.word.text}`,
+      );
+      return;
+    }
+    if (event.type === "typing.rejected" && event.playerId === onlineSnapshot.selfPlayerId) {
+      setInputError(true);
+      window.setTimeout(() => setInputError(false), 260);
+      return;
+    }
+    if (event.type === "attack.resolved") {
+      const target = event.targetId
+        ? playersRef.current.find((player) => player.id === event.targetId)
+        : null;
+      setAnnouncement(
+        event.missed || !target
+          ? "雪球落在了空雪地上"
+          : `${target.name} 承受 ${event.actualDamage} 点伤害`,
+      );
+      return;
+    }
+    if (event.type === "match.started") setAnnouncement("联机对战开始！");
+    if (event.type === "match.ended") setAnnouncement(`${event.winner === "pine" ? "雪松队" : "红莓队"}获胜！`);
+  }, [
+    getOnlineServerNow,
+    isOnline,
+    launchSnowball,
+    onlineServerTimeOffsetMs,
+    onlineSnapshot,
+    room.lastEvent,
+  ]);
 
   const spawnWord = useCallback(
     (seedY?: number) => {
@@ -1104,7 +1339,7 @@ export default function SnowballGame() {
     clearPendingTimers();
     const cleanPlayers = players.map((player) => ({
       ...player,
-      name: player.id === "you" ? playerName.trim() || "小雪球" : player.name,
+      name: player.isUser ? playerName.trim() || "小雪球" : player.name,
       health: player.maxHealth,
       claims: 0,
       damage: 0,
@@ -1172,16 +1407,16 @@ export default function SnowballGame() {
   }, [typed]);
 
   useEffect(() => {
-    if (stage !== "playing") return;
+    if (isOnline || stage !== "playing") return;
     const staleWords = wordsRef.current.filter((word) => {
       const racer = playersRef.current.find((player) => player.id === word.aiPlayerId);
       return !racer || !racer.active || racer.health <= 0;
     });
     staleWords.forEach((word) => reassignWordAi(word.id));
-  }, [players, reassignWordAi, stage]);
+  }, [isOnline, players, reassignWordAi, stage]);
 
   useEffect(() => {
-    if (stage !== "countdown") return;
+    if (isOnline || stage !== "countdown") return;
     const timer = window.setTimeout(() => {
       if (countdown <= 0) {
         wordsRef.current = [];
@@ -1197,7 +1432,7 @@ export default function SnowballGame() {
       setCountdown((value) => value - 1);
     }, countdown <= 0 ? 0 : 720);
     return () => window.clearTimeout(timer);
-  }, [countdown, maxWords, setGameStage, snowfallProfile.initialWords, spawnWord, stage]);
+  }, [countdown, isOnline, maxWords, setGameStage, snowfallProfile.initialWords, spawnWord, stage]);
 
   useEffect(() => {
     if (stage === "playing" && userAlive) window.setTimeout(() => inputRef.current?.focus(), 30);
@@ -1211,7 +1446,9 @@ export default function SnowballGame() {
         ...word,
         y: Math.min(word.restY, word.y + word.speed * 0.055),
         aiProgress:
-          now < word.aiStartedAt
+          word.aiStartedAt === null || word.claimAt === null
+            ? 0
+            : now < word.aiStartedAt
             ? 0
             : clamp((now - word.aiStartedAt) / Math.max(1, word.claimAt - word.aiStartedAt), 0, 1),
       }));
@@ -1220,11 +1457,11 @@ export default function SnowballGame() {
     }, 55);
 
     const aiTimer = window.setInterval(() => {
-      if (stageRef.current !== "playing") return;
+      if (isOnline || stageRef.current !== "playing") return;
       const now = Date.now();
       const due = wordsRef.current
-        .filter((word) => word.claimAt <= now)
-        .sort((a, b) => a.claimAt - b.claimAt)[0];
+        .filter((word) => word.claimAt !== null && word.claimAt <= now)
+        .sort((a, b) => (a.claimAt ?? Infinity) - (b.claimAt ?? Infinity))[0];
       if (!due) return;
       const bot = playersRef.current.find((player) => player.id === due.aiPlayerId);
       if (!bot || !bot.active || bot.health <= 0) reassignWordAi(due.id);
@@ -1236,7 +1473,7 @@ export default function SnowballGame() {
     const scheduleNextSpawn = () => {
       const delay = createSpawnDelay(snowfallProfile.interval, spawnPlayerScale);
       spawnTimer = window.setTimeout(() => {
-        if (stageRef.current === "playing") spawnWord();
+        if (!isOnline && stageRef.current === "playing") spawnWord();
         if (!spawnLoopStopped) scheduleNextSpawn();
       }, delay);
     };
@@ -1245,7 +1482,7 @@ export default function SnowballGame() {
     const clockTimer = window.setInterval(() => {
       if (stageRef.current !== "playing" || !gameStartedAtRef.current) return;
       setElapsed(Math.floor((Date.now() - gameStartedAtRef.current) / 1000));
-      if (Date.now() - lastClaimRef.current > 4200 && comboRef.current > 0) {
+      if (!isOnline && Date.now() - lastClaimRef.current > 4200 && comboRef.current > 0) {
         comboRef.current = 0;
         setCombo(0);
       }
@@ -1258,11 +1495,11 @@ export default function SnowballGame() {
       window.clearTimeout(spawnTimer);
       window.clearInterval(clockTimer);
     };
-  }, [claimWord, reassignWordAi, snowfallProfile.interval, spawnPlayerScale, spawnWord]);
+  }, [claimWord, isOnline, reassignWordAi, snowfallProfile.interval, spawnPlayerScale, spawnWord]);
 
   useEffect(() => {
     const handleVisibility = () => {
-      if (document.hidden && stageRef.current === "playing") {
+      if (!isOnline && document.hidden && stageRef.current === "playing") {
         pausedAtRef.current = Date.now();
         pausePendingTimers();
         setGameStage("paused");
@@ -1271,7 +1508,7 @@ export default function SnowballGame() {
     };
     document.addEventListener("visibilitychange", handleVisibility);
     return () => document.removeEventListener("visibilitychange", handleVisibility);
-  }, [pausePendingTimers, setGameStage]);
+  }, [isOnline, pausePendingTimers, setGameStage]);
 
   useEffect(
     () => () => {
@@ -1281,6 +1518,7 @@ export default function SnowballGame() {
   );
 
   const handleInput = (event: ChangeEvent<HTMLInputElement>) => {
+    if (isOnline) return;
     if (stageRef.current !== "playing" || !userAlive) return;
     const previousTyped = typedRef.current;
     const nextValue = event.target.value.toLowerCase().replace(/[^a-z]/g, "").slice(0, 14);
@@ -1319,13 +1557,44 @@ export default function SnowballGame() {
       typedRef.current = "";
       setTyped("");
       clearTargetWord();
-      claimWord(exact.id, "you");
+      if (user) claimWord(exact.id, user.id);
     }
   };
 
   const handleInputKeyDown = (event: KeyboardEvent<HTMLInputElement>) => {
-    if (event.key === "Escape" || event.key === " ") {
+    if (isOnline && /^[a-zA-Z]$/.test(event.key)) {
       event.preventDefault();
+      if (stageRef.current !== "playing" || !userAlive || !room.connected) return;
+      const key = event.key.toLowerCase();
+      room.sendCommand({ op: "type.key", key });
+      const nextValue = `${typedRef.current}${key}`.slice(0, 14);
+      const target = targetWordIdRef.current === null
+        ? null
+        : wordsRef.current.find((word) => word.id === targetWordIdRef.current) ?? null;
+      const matches = target
+        ? target.text.startsWith(nextValue) ? [target] : []
+        : wordsRef.current.filter((word) => word.text.startsWith(nextValue));
+      if (!matches.length) {
+        setInputError(true);
+        setWrongKeys((value) => value + 1);
+        window.setTimeout(() => setInputError(false), 260);
+        return;
+      }
+      if (!target && matches.length === 1) lockTargetWord(matches[0].id);
+      typedRef.current = nextValue;
+      setTyped(nextValue);
+      setCorrectKeys((value) => value + 1);
+      const exact = matches.length === 1 && matches[0].text === nextValue;
+      if (exact) {
+        typedRef.current = "";
+        setTyped("");
+        clearTargetWord();
+      }
+      return;
+    }
+    if (event.key === "Escape" || event.key === " " || (isOnline && event.key === "Backspace")) {
+      event.preventDefault();
+      if (isOnline) room.sendCommand({ op: "type.cancel" });
       typedRef.current = "";
       setTyped("");
       clearTargetWord();
@@ -1339,8 +1608,8 @@ export default function SnowballGame() {
       const shiftedWords = wordsRef.current.map((word) => ({
         ...word,
         bornAt: word.bornAt + pauseDuration,
-        aiStartedAt: word.aiStartedAt + pauseDuration,
-        claimAt: word.claimAt + pauseDuration,
+        aiStartedAt: word.aiStartedAt === null ? null : word.aiStartedAt + pauseDuration,
+        claimAt: word.claimAt === null ? null : word.claimAt + pauseDuration,
       }));
       wordsRef.current = shiftedWords;
       setWords(shiftedWords);
@@ -1354,6 +1623,54 @@ export default function SnowballGame() {
     setGameStage("playing");
     resumePendingTimers();
     setAnnouncement(userAlive ? "继续抢英文单词！" : "你已出局，AI 队友继续作战");
+  };
+
+  const switchToOnlineMode = () => {
+    clearPendingTimers();
+    wordsRef.current = [];
+    setWords([]);
+    setProjectiles([]);
+    setCatchEffects([]);
+    typedRef.current = "";
+    setTyped("");
+    clearTargetWord();
+    setGameStage("lobby");
+    setGameMode("online");
+    setAnnouncement("创建房间或输入好友的房间码");
+  };
+
+  const switchToLocalMode = () => {
+    room.leave({ forgetCredentials: false });
+    clearPendingTimers();
+    const localPlayers = createInitialPlayers();
+    playersRef.current = localPlayers;
+    setPlayers(localPlayers);
+    wordsRef.current = [];
+    setWords([]);
+    setProjectiles([]);
+    setCatchEffects([]);
+    setCharacterActions(createIdleActions());
+    typedRef.current = "";
+    setTyped("");
+    clearTargetWord();
+    setWinner(null);
+    setGameStage("lobby");
+    setGameMode("local");
+    setAnnouncement("等待开战");
+  };
+
+  const leaveOnlineRoom = () => {
+    room.leave();
+    clearPendingTimers();
+    wordsRef.current = [];
+    setWords([]);
+    setProjectiles([]);
+    setCatchEffects([]);
+    typedRef.current = "";
+    setTyped("");
+    clearTargetWord();
+    setWinner(null);
+    setGameStage("lobby");
   };
 
   return (
@@ -1375,8 +1692,28 @@ export default function SnowballGame() {
       </div>
 
       {stage === "lobby" ? (
+        isOnline ? (
+          <OnlineLobby
+            playerName={playerName}
+            setPlayerName={setPlayerName}
+            roomCode={roomCodeInput}
+            setRoomCode={setRoomCodeInput}
+            status={room.status}
+            error={room.error?.message ?? null}
+            snapshot={onlineSnapshot}
+            onCreate={() => { void room.createRoom(playerName); }}
+            onJoin={() => { room.joinRoom(roomCodeInput, playerName); }}
+            onLeave={leaveOnlineRoom}
+            onLocalMode={switchToLocalMode}
+            sendCommand={(command) => { room.sendCommand(command); }}
+          />
+        ) : (
         <section className="lobby" aria-labelledby="game-title">
           <div className="lobby__story">
+            <div className="mode-switch" role="group" aria-label="游戏模式">
+              <button className="is-active">本机 AI</button>
+              <button onClick={switchToOnlineMode}>好友联机</button>
+            </div>
             <p className="eyebrow"><span /> SNOWCRAFT-INSPIRED TACTICAL REMAKE</p>
             <h1 id="game-title">排好阵型，<br /><em>开打雪仗！</em></h1>
             <p className="lobby__lead">
@@ -1499,32 +1836,41 @@ export default function SnowballGame() {
             </div>
           </div>
         </section>
+        )
       ) : (
         <section className="match" aria-label="雪仗对战">
           <header className="match-header">
-            <button className="brand-button" onClick={returnToLobby} aria-label="返回阵型房间">
+            <button className="brand-button" onClick={isOnline ? leaveOnlineRoom : returnToLobby} aria-label="返回阵型房间">
               <span className="brand-button__flake">✦</span>
               <span><strong>河岸雪仗</strong><small>SNOW TYPE BATTLE</small></span>
             </button>
             <div className="match-header__status">
               <span>{stage === "playing" ? "对战进行中" : stage === "countdown" ? "即将开战" : stage === "paused" ? "暂停中" : "本局结束"}</span>
               <b>{formatClock(elapsed)}</b>
-              <small>{pinePlayers.length}v{berryPlayers.length} · {selectedWordbook.shortLabel} · {snowfallProfile.short} · 前排锁定</small>
+              <small>
+                {pinePlayers.length}v{berryPlayers.length} · {selectedWordbook.shortLabel} · {snowfallProfile.short} · {isOnline ? `房间 ${onlineSnapshot?.code ?? "------"}` : "前排锁定"}
+              </small>
             </div>
-            <button
-              className="paper-button"
-              onClick={() => {
-                if (stage === "paused") resume();
-                else {
-                  pausedAtRef.current = Date.now();
-                  pausePendingTimers();
-                  setGameStage("paused");
-                }
-              }}
-              disabled={stage === "countdown" || stage === "ended"}
-            >
-              {stage === "paused" ? "继续" : "暂停"}
-            </button>
+            {isOnline ? (
+              <button className="paper-button" disabled>
+                {room.status === "connected" ? "● 联机中" : "↻ 重连中"}
+              </button>
+            ) : (
+              <button
+                className="paper-button"
+                onClick={() => {
+                  if (stage === "paused") resume();
+                  else {
+                    pausedAtRef.current = Date.now();
+                    pausePendingTimers();
+                    setGameStage("paused");
+                  }
+                }}
+                disabled={stage === "countdown" || stage === "ended"}
+              >
+                {stage === "paused" ? "继续" : "暂停"}
+              </button>
+            )}
           </header>
 
           <div className="scoreboard scoreboard--individual">
@@ -1595,16 +1941,35 @@ export default function SnowballGame() {
                 const matchLength = typed && (targetWordId === null || isLockedTarget) && word.text.startsWith(typed)
                   ? typed.length
                   : 0;
-                const racer = players.find((player) => player.id === word.aiPlayerId);
+                const networkRacers = onlineSnapshot
+                  ? Object.entries(onlineSnapshot.typingByPlayer)
+                      .filter(([, state]) => state.targetWordId === word.id && state.buffer.length > 0)
+                      .map(([playerId, state]) => ({
+                        playerId,
+                        progress: state.buffer.length / word.text.length,
+                      }))
+                      .sort((a, b) => b.progress - a.progress)
+                  : [];
+                const networkLeader = networkRacers[0] ?? null;
                 const aiProgress = word.aiProgress;
                 const playerProgress = matchLength / word.text.length;
-                const raceState =
-                  playerProgress > aiProgress
+                const networkProgress = networkLeader?.progress ?? 0;
+                const leaderId = isOnline
+                  ? networkProgress >= aiProgress
+                    ? networkLeader?.playerId ?? null
+                    : word.aiPlayerId
+                  : playerProgress > aiProgress
+                    ? user?.id ?? null
+                    : word.aiPlayerId;
+                const racer = players.find((player) => player.id === leaderId);
+                const visibleProgress = isOnline
+                  ? Math.max(networkProgress, aiProgress)
+                  : Math.max(playerProgress, aiProgress);
+                const raceState = visibleProgress <= 0
+                  ? "idle"
+                  : leaderId === user?.id
                     ? "leading"
-                    : aiProgress > 0 || playerProgress > 0
-                      ? "contested"
-                      : "idle";
-                const visibleProgress = Math.max(playerProgress, aiProgress);
+                    : "contested";
                 return (
                   <div
                     key={word.id}
@@ -1685,7 +2050,32 @@ export default function SnowballGame() {
               <div className="arena-overlay">
                 {stage === "countdown" && <><small>前排举盾</small><strong>{countdown || "GO!"}</strong><p>手放到英文键盘上</p></>}
                 {stage === "paused" && <><small>雪球先放下</small><strong>暂停</strong><p>AI 进度也已暂停</p><button onClick={resume}>继续对战</button></>}
-                {stage === "ended" && <><small>{winner === "pine" ? "守住河岸！" : "防线被突破"}</small><strong>{winner === "pine" ? "胜利" : "再战"}</strong><p>最佳连击 ×{bestCombo} · 准确率 {accuracy}%</p><div><button onClick={startMatch}>同阵型再来</button><button className="ghost" onClick={returnToLobby}>重排阵型</button></div></>}
+                {stage === "ended" && (
+                  <>
+                    <small>{winner === "pine" ? "雪松队守住河岸！" : "红莓队突破防线！"}</small>
+                    <strong>{user?.team === winner ? "胜利" : "再战"}</strong>
+                    <p>最佳连击 ×{bestCombo} · 准确率 {accuracy}%</p>
+                    <div>
+                      {isOnline ? (
+                        onlineSnapshot?.selfPlayerId === onlineSnapshot?.hostPlayerId
+                          ? <button onClick={() => room.sendCommand({ op: "match.restart" })}>返回房间大厅</button>
+                          : <button disabled>等待房主重开</button>
+                      ) : (
+                        <button onClick={startMatch}>同阵型再来</button>
+                      )}
+                      <button className="ghost" onClick={isOnline ? leaveOnlineRoom : returnToLobby}>
+                        {isOnline ? "离开房间" : "重排阵型"}
+                      </button>
+                    </div>
+                  </>
+                )}
+              </div>
+            )}
+            {isOnline && stage === "playing" && !room.connected && (
+              <div className="arena-overlay arena-overlay--network">
+                <small>席位仍为你保留</small>
+                <strong>重连中</strong>
+                <p>比赛会在服务器继续；连上后自动同步最新血量和雪花。</p>
               </div>
             )}
           </div>
@@ -1699,7 +2089,9 @@ export default function SnowballGame() {
             <label className={`type-box${inputError ? " is-error" : ""}${typed ? " has-text" : ""}`}>
               <span className="type-box__hint">
                 {userAlive
-                  ? lockedTarget
+                  ? isOnline && !room.connected
+                    ? "网络中断，正在自动重连…"
+                    : lockedTarget
                     ? `已锁定 ${lockedTarget.text}；SPACE / ESC 可放弃`
                     : `${selectedWordbook.shortLabel}；前缀唯一后自动锁定目标`
                   : "你已出局，AI 队友仍会继续战斗"}
@@ -1711,8 +2103,8 @@ export default function SnowballGame() {
                   value={typed}
                   onChange={handleInput}
                   onKeyDown={handleInputKeyDown}
-                  disabled={stage !== "playing" || !userAlive}
-                  placeholder={userAlive ? "type an English word…" : "you are out"}
+                  disabled={stage !== "playing" || !userAlive || (isOnline && !room.connected)}
+                  placeholder={userAlive ? (isOnline && !room.connected ? "reconnecting…" : "type an English word…") : "you are out"}
                   lang="en"
                   inputMode="text"
                   autoCapitalize="none"
@@ -1731,7 +2123,7 @@ export default function SnowballGame() {
             <div className="stat-card stat-card--right">
               <small>输入准确率</small>
               <strong>{accuracy}%</strong>
-              <span>{players.find((player) => player.id === "you")?.claims ?? 0} 个雪球</span>
+              <span>{players.find((player) => player.isUser)?.claims ?? 0} 个雪球</span>
             </div>
           </div>
         </section>
