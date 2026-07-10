@@ -43,7 +43,49 @@ type Projectile = {
   team: Team;
   text: string;
   damage: number;
-  lane: number;
+  sourcePlayerId: string;
+  targetPlayerId: string;
+  fromX: number;
+  fromY: number;
+  midX: number;
+  apexY: number;
+  toX: number;
+  toY: number;
+};
+
+type CharacterPhase =
+  | "idle"
+  | "catch"
+  | "hold"
+  | "windup"
+  | "throw"
+  | "hit"
+  | "cheer"
+  | "defeat";
+
+type CharacterAction = {
+  phase: CharacterPhase;
+  token: number;
+  word?: string;
+};
+
+type CatchEffect = {
+  id: number;
+  team: Team;
+  playerId: string;
+  text: string;
+  fromX: number;
+  fromY: number;
+  midX: number;
+  apexY: number;
+  toX: number;
+  toY: number;
+};
+
+type ActorAnchor = {
+  x: number;
+  handY: number;
+  hitY: number;
 };
 
 const MAX_HEALTH = 120;
@@ -128,6 +170,36 @@ const BASE_PLAYERS: Player[] = [
   { id: "berry-4", name: "星星", team: "berry", badge: "星", claims: 0, damage: 0 },
 ];
 
+const KID_PALETTES = [
+  { coat: "#e7684f", hat: "#ffd166", scarf: "#f7b34b", skin: "#ffd1aa" },
+  { coat: "#4f877d", hat: "#f08a5d", scarf: "#ffcf72", skin: "#edb990" },
+  { coat: "#8c68a8", hat: "#e85d75", scarf: "#ffd166", skin: "#f4c39c" },
+  { coat: "#d58a42", hat: "#4f877d", scarf: "#f6e27a", skin: "#d99e76" },
+  { coat: "#4b83b4", hat: "#ef6d67", scarf: "#f7b34b", skin: "#f1c09a" },
+  { coat: "#696fa3", hat: "#55a9b8", scarf: "#f7cc68", skin: "#dca47d" },
+  { coat: "#3f7898", hat: "#a86c9d", scarf: "#f4a261", skin: "#f3c6a3" },
+  { coat: "#6f83b7", hat: "#d45c70", scarf: "#ffd166", skin: "#e5ad86" },
+];
+
+function getActorAnchor(player: Player): ActorAnchor {
+  const teamPlayers = BASE_PLAYERS.filter((item) => item.team === player.team);
+  const index = Math.max(0, teamPlayers.findIndex((item) => item.id === player.id));
+  const pineX = [7.4, 15.3, 23.1, 30.7];
+  const berryX = [92.6, 84.7, 76.9, 69.3];
+  const handY = [68, 62, 71, 59];
+  return {
+    x: player.team === "pine" ? pineX[index] : berryX[index],
+    handY: handY[index],
+    hitY: handY[index] - 6,
+  };
+}
+
+function createIdleActions(): Record<string, CharacterAction> {
+  return Object.fromEntries(
+    BASE_PLAYERS.map((player) => [player.id, { phase: "idle", token: 0 }]),
+  ) as Record<string, CharacterAction>;
+}
+
 const AMBIENT_SNOW = Array.from({ length: 34 }, (_, index) => ({
   id: index,
   left: (index * 37 + 11) % 100,
@@ -152,22 +224,91 @@ function TeamMark({ team }: { team: Team }) {
   return <span className={`team-mark team-mark--${team}`} aria-hidden="true" />;
 }
 
-function Kid({ player, hit }: { player: Player; hit: boolean }) {
+function Kid({
+  player,
+  action,
+  finale,
+  nodeRef,
+}: {
+  player: Player;
+  action: CharacterAction;
+  finale?: "cheer" | "defeat";
+  nodeRef?: (node: HTMLDivElement | null) => void;
+}) {
+  const phase = action.phase === "hit" ? "hit" : finale ?? action.phase;
+  const paletteIndex = Math.max(0, BASE_PLAYERS.findIndex((item) => item.id === player.id));
+  const palette = KID_PALETTES[paletteIndex];
+  const actionLabel: Partial<Record<CharacterPhase, string>> = {
+    catch: "抓住！",
+    hold: "捏雪球…",
+    windup: "蓄力！",
+    throw: "扔！",
+    hit: "哎呀！",
+    cheer: "好耶！",
+    defeat: "呜…",
+  };
+
   return (
-    <div className={`kid kid--${player.team}${hit ? " is-hit" : ""}`}>
-      <span className="kid__hat" />
-      <span className="kid__head">{player.badge}</span>
-      <span className="kid__body" />
-      <span className="kid__scarf" />
+    <div
+      ref={nodeRef}
+      className={`kid kid--${player.team} is-${phase}${player.isUser ? " is-user" : ""}`}
+      style={
+        {
+          "--kid-coat": palette.coat,
+          "--kid-hat": palette.hat,
+          "--kid-scarf": palette.scarf,
+          "--kid-skin": palette.skin,
+        } as CSSProperties
+      }
+      aria-label={`${player.name}，${actionLabel[phase] ?? "准备中"}`}
+    >
+      <span className="kid__shadow" aria-hidden="true" />
+      <div className="kid__scale">
+        <div className="kid__figure" key={`${action.token}-${phase}`}>
+          <span className="kid__leg kid__leg--back"><i /></span>
+          <span className="kid__leg kid__leg--front"><i /></span>
+          <span className="kid__arm kid__arm--back"><i className="kid__mitten" /></span>
+          <span className="kid__body"><i className="kid__zip" /><i className="kid__pocket" /></span>
+          <span className="kid__head">
+            <span className="kid__face"><i /><i /><b /></span>
+            <span className="kid__ear" />
+          </span>
+          <span className="kid__hat"><i /></span>
+          <span className="kid__scarf"><i /></span>
+          <span className="kid__arm kid__arm--front"><i className="kid__mitten" /></span>
+          <span className="kid__held-ball"><i>{action.word}</i></span>
+          <span className="kid__impact" aria-hidden="true">
+            <i /><i /><i /><i /><i /><b>啪!</b>
+          </span>
+        </div>
+      </div>
+      {actionLabel[phase] && <span className="kid__action">{actionLabel[phase]}</span>}
       <span className="kid__name">{player.name}</span>
     </div>
   );
 }
 
 function RosterCard({ player }: { player: Player }) {
+  const paletteIndex = Math.max(0, BASE_PLAYERS.findIndex((item) => item.id === player.id));
+  const palette = KID_PALETTES[paletteIndex];
   return (
     <div className={`roster-card roster-card--${player.team}${player.isUser ? " is-you" : ""}`}>
-      <span className="roster-card__badge">{player.badge}</span>
+      <span
+        className="roster-card__avatar"
+        style={
+          {
+            "--kid-coat": palette.coat,
+            "--kid-hat": palette.hat,
+            "--kid-skin": palette.skin,
+          } as CSSProperties
+        }
+        aria-hidden="true"
+      >
+        <i className="roster-card__body" />
+        <i className="roster-card__head" />
+        <i className="roster-card__hat" />
+        <b className="roster-card__arm" />
+      </span>
       <span>
         <strong>{player.name}</strong>
         <small>{player.isUser ? "本地玩家" : `${player.claims} 次命中`}</small>
@@ -184,6 +325,9 @@ export default function SnowballGame() {
   const [players, setPlayers] = useState<Player[]>(BASE_PLAYERS);
   const [words, setWords] = useState<SnowWord[]>([]);
   const [projectiles, setProjectiles] = useState<Projectile[]>([]);
+  const [catchEffects, setCatchEffects] = useState<CatchEffect[]>([]);
+  const [characterActions, setCharacterActions] =
+    useState<Record<string, CharacterAction>>(createIdleActions);
   const [pineHealth, setPineHealth] = useState(MAX_HEALTH);
   const [berryHealth, setBerryHealth] = useState(MAX_HEALTH);
   const [typed, setTyped] = useState("");
@@ -196,9 +340,11 @@ export default function SnowballGame() {
   const [winner, setWinner] = useState<Team | null>(null);
   const [inputError, setInputError] = useState(false);
   const [announcement, setAnnouncement] = useState("等待开战");
-  const [hitTeam, setHitTeam] = useState<Team | null>(null);
 
   const inputRef = useRef<HTMLInputElement>(null);
+  const arenaRef = useRef<HTMLDivElement>(null);
+  const kidNodesRef = useRef(new Map<string, HTMLDivElement>());
+  const wordNodesRef = useRef(new Map<number, HTMLDivElement>());
   const stageRef = useRef<Stage>(stage);
   const wordsRef = useRef<SnowWord[]>([]);
   const playersRef = useRef<Player[]>(players);
@@ -210,6 +356,8 @@ export default function SnowballGame() {
   const sequenceRef = useRef(0);
   const lockedWordsRef = useRef(new Set<number>());
   const timersRef = useRef<number[]>([]);
+  const actorAvailableAtRef = useRef<Record<string, number>>({});
+  const targetCursorRef = useRef<Record<Team, number>>({ pine: 0, berry: 0 });
 
   const config = DIFFICULTIES[difficulty];
   const activePlayers = useMemo(
@@ -237,6 +385,46 @@ export default function SnowballGame() {
     timersRef.current.push(timer);
     return timer;
   }, []);
+
+  const setCharacterPose = useCallback(
+    (playerId: string, phase: CharacterPhase, word?: string) => {
+      setCharacterActions((current) => ({
+        ...current,
+        [playerId]: {
+          phase,
+          token: ++sequenceRef.current,
+          ...(word ? { word } : {}),
+        },
+      }));
+    },
+    [],
+  );
+
+  const settleCharacterPose = useCallback(
+    (playerId: string, expectedPhase: CharacterPhase) => {
+      setCharacterActions((current) => {
+        if (current[playerId]?.phase !== expectedPhase) return current;
+        return {
+          ...current,
+          [playerId]: { phase: "idle", token: ++sequenceRef.current },
+        };
+      });
+    },
+    [],
+  );
+
+  const pointInArena = useCallback(
+    (node: HTMLElement | undefined, xFactor = 0.5, yFactor = 0.5) => {
+      const arena = arenaRef.current?.getBoundingClientRect();
+      const rect = node?.getBoundingClientRect();
+      if (!arena || !rect || !arena.width || !arena.height) return null;
+      return {
+        x: ((rect.left + rect.width * xFactor - arena.left) / arena.width) * 100,
+        y: ((rect.top + rect.height * yFactor - arena.top) / arena.height) * 100,
+      };
+    },
+    [],
+  );
 
   const clearPendingTimers = useCallback(() => {
     timersRef.current.forEach((timer) => window.clearTimeout(timer));
@@ -280,8 +468,6 @@ export default function SnowballGame() {
   const applyDamage = useCallback(
     (attackingTeam: Team, damage: number) => {
       const target: Team = attackingTeam === "pine" ? "berry" : "pine";
-      setHitTeam(target);
-      rememberTimer(window.setTimeout(() => setHitTeam(null), 420));
 
       if (target === "berry") {
         const next = clamp(berryHealthRef.current - damage, 0, MAX_HEALTH);
@@ -295,28 +481,113 @@ export default function SnowballGame() {
         if (next === 0) endMatch("berry");
       }
     },
-    [endMatch, rememberTimer],
+    [endMatch],
   );
 
   const launchSnowball = useCallback(
-    (team: Team, text: string, damage: number) => {
-      const id = ++sequenceRef.current;
-      const projectile: Projectile = {
-        id,
-        team,
-        text,
-        damage,
-        lane: 25 + Math.random() * 46,
+    (player: Player, word: SnowWord, damage: number) => {
+      const now = Date.now();
+      const startsAt = Math.max(now, actorAvailableAtRef.current[player.id] ?? now);
+      const queueDelay = startsAt - now;
+      actorAvailableAtRef.current[player.id] = startsAt + 1850;
+
+      const opponents = playersRef.current.filter((candidate) => candidate.team !== player.team);
+      const targetTeam: Team = player.team === "pine" ? "berry" : "pine";
+      const targetIndex = targetCursorRef.current[targetTeam] % opponents.length;
+      targetCursorRef.current[targetTeam] += 1;
+      const target = opponents[targetIndex];
+      if (!target) return;
+
+      const sourceFallback = getActorAnchor(player);
+      const targetFallback = getActorAnchor(target);
+      const visibleWord = pointInArena(wordNodesRef.current.get(word.id)) ?? {
+        x: word.x,
+        y: word.y,
       };
-      setProjectiles((current) => [...current, projectile]);
+      const sourceAnchor = pointInArena(
+        kidNodesRef.current.get(player.id),
+        player.team === "pine" ? 0.78 : 0.22,
+        0.56,
+      ) ?? { x: sourceFallback.x, y: sourceFallback.handY };
+      const targetAnchor = pointInArena(
+        kidNodesRef.current.get(target.id),
+        0.5,
+        0.37,
+      ) ?? { x: targetFallback.x, y: targetFallback.hitY };
+      const catchId = ++sequenceRef.current;
+      const projectileId = ++sequenceRef.current;
+      const catchEffect: CatchEffect = {
+        id: catchId,
+        team: player.team,
+        playerId: player.id,
+        text: word.text,
+        fromX: visibleWord.x,
+        fromY: visibleWord.y,
+        midX: (visibleWord.x + sourceAnchor.x) / 2,
+        apexY: Math.max(6, Math.min(visibleWord.y, sourceAnchor.y) - 11),
+        toX: sourceAnchor.x,
+        toY: sourceAnchor.y,
+      };
+      const projectile: Projectile = {
+        id: projectileId,
+        team: player.team,
+        text: word.text,
+        damage,
+        sourcePlayerId: player.id,
+        targetPlayerId: target.id,
+        fromX: sourceAnchor.x,
+        fromY: sourceAnchor.y,
+        midX: (sourceAnchor.x + targetAnchor.x) / 2,
+        apexY: Math.max(8, Math.min(sourceAnchor.y, targetAnchor.y) - 28),
+        toX: targetAnchor.x,
+        toY: targetAnchor.y,
+      };
+
       rememberTimer(
         window.setTimeout(() => {
-          setProjectiles((current) => current.filter((item) => item.id !== id));
-          if (stageRef.current !== "ended") applyDamage(team, damage);
-        }, 610),
+          if (stageRef.current === "ended") return;
+          setCatchEffects((current) => [...current, catchEffect]);
+          setCharacterPose(player.id, "catch", word.text);
+        }, queueDelay),
+      );
+      rememberTimer(
+        window.setTimeout(() => {
+          setCatchEffects((current) => current.filter((effect) => effect.id !== catchId));
+          if (stageRef.current !== "ended") setCharacterPose(player.id, "hold", word.text);
+        }, queueDelay + 410),
+      );
+      rememberTimer(
+        window.setTimeout(() => {
+          if (stageRef.current !== "ended") setCharacterPose(player.id, "windup", word.text);
+        }, queueDelay + 650),
+      );
+      rememberTimer(
+        window.setTimeout(() => {
+          if (stageRef.current === "ended") return;
+          setCharacterPose(player.id, "throw", word.text);
+          setProjectiles((current) => [...current, projectile]);
+        }, queueDelay + 900),
+      );
+      rememberTimer(
+        window.setTimeout(() => {
+          setProjectiles((current) => current.filter((item) => item.id !== projectileId));
+          if (stageRef.current === "ended") return;
+          setCharacterPose(target.id, "hit");
+          applyDamage(player.team, damage);
+        }, queueDelay + 1510),
+      );
+      rememberTimer(
+        window.setTimeout(() => {
+          settleCharacterPose(player.id, "throw");
+        }, queueDelay + 1740),
+      );
+      rememberTimer(
+        window.setTimeout(() => {
+          settleCharacterPose(target.id, "hit");
+        }, queueDelay + 2110),
       );
     },
-    [applyDamage, rememberTimer],
+    [applyDamage, pointInArena, rememberTimer, setCharacterPose, settleCharacterPose],
   );
 
   const claimWord = useCallback(
@@ -352,7 +623,7 @@ export default function SnowballGame() {
       }
 
       registerHit(player.id, damage);
-      launchSnowball(player.team, word.text, damage);
+      launchSnowball(player, word, damage);
     },
     [launchSnowball, registerHit, say, typed],
   );
@@ -405,6 +676,10 @@ export default function SnowballGame() {
     wordsRef.current = [];
     setWords([]);
     setProjectiles([]);
+    setCatchEffects([]);
+    setCharacterActions(createIdleActions());
+    actorAvailableAtRef.current = {};
+    targetCursorRef.current = { pine: 0, berry: 0 };
     lockedWordsRef.current.clear();
     pineHealthRef.current = MAX_HEALTH;
     berryHealthRef.current = MAX_HEALTH;
@@ -431,6 +706,9 @@ export default function SnowballGame() {
     wordsRef.current = [];
     setWords([]);
     setProjectiles([]);
+    setCatchEffects([]);
+    setCharacterActions(createIdleActions());
+    actorAvailableAtRef.current = {};
     setTyped("");
     setWinner(null);
     setGameStage("lobby");
@@ -713,7 +991,7 @@ export default function SnowballGame() {
             </section>
           </div>
 
-          <div className="arena" onClick={() => inputRef.current?.focus()}>
+          <div ref={arenaRef} className="arena" onClick={() => inputRef.current?.focus()}>
             <div className="sky-hills" aria-hidden="true">
               <span className="hill hill--one" />
               <span className="hill hill--two" />
@@ -726,11 +1004,33 @@ export default function SnowballGame() {
             <div className="river" aria-hidden="true"><i /><i /><i /></div>
             <div className="bank bank--berry" aria-hidden="true" />
 
-            <div className={`kids kids--pine${hitTeam === "pine" ? " is-hit" : ""}`}>
-              {pinePlayers.map((player) => <Kid key={player.id} player={player} hit={hitTeam === "pine"} />)}
+            <div className="kids kids--pine">
+              {pinePlayers.map((player) => (
+                <Kid
+                  key={player.id}
+                  player={player}
+                  action={characterActions[player.id] ?? { phase: "idle", token: 0 }}
+                  finale={stage === "ended" ? (winner === "pine" ? "cheer" : "defeat") : undefined}
+                  nodeRef={(node) => {
+                    if (node) kidNodesRef.current.set(player.id, node);
+                    else kidNodesRef.current.delete(player.id);
+                  }}
+                />
+              ))}
             </div>
-            <div className={`kids kids--berry${hitTeam === "berry" ? " is-hit" : ""}`}>
-              {berryPlayers.map((player) => <Kid key={player.id} player={player} hit={hitTeam === "berry"} />)}
+            <div className="kids kids--berry">
+              {berryPlayers.map((player) => (
+                <Kid
+                  key={player.id}
+                  player={player}
+                  action={characterActions[player.id] ?? { phase: "idle", token: 0 }}
+                  finale={stage === "ended" ? (winner === "berry" ? "cheer" : "defeat") : undefined}
+                  nodeRef={(node) => {
+                    if (node) kidNodesRef.current.set(player.id, node);
+                    else kidNodesRef.current.delete(player.id);
+                  }}
+                />
+              ))}
             </div>
 
             <div className="word-field" aria-label="飘落的单词">
@@ -740,6 +1040,10 @@ export default function SnowballGame() {
                 return (
                   <div
                     key={word.id}
+                    ref={(node) => {
+                      if (node) wordNodesRef.current.set(word.id, node);
+                      else wordNodesRef.current.delete(word.id);
+                    }}
                     className={`snow-word snow-word--${word.aiTeam}${matchLength ? " is-matching" : ""}${focusedWordId === word.id ? " is-focused" : ""}`}
                     style={
                       {
@@ -750,21 +1054,52 @@ export default function SnowballGame() {
                       } as CSSProperties
                     }
                   >
-                    <span className="snow-word__flake" aria-hidden="true">✦</span>
-                    <strong>
-                      <b>{word.text.slice(0, matchLength)}</b>{word.text.slice(matchLength)}
-                    </strong>
-                    <i aria-hidden="true" />
+                    <div className="snow-word__sway">
+                      <span className="snow-word__flake" aria-hidden="true">❄</span>
+                      <strong>
+                        <b>{word.text.slice(0, matchLength)}</b>{word.text.slice(matchLength)}
+                      </strong>
+                      <i aria-hidden="true" />
+                    </div>
                   </div>
                 );
               })}
             </div>
 
+            {catchEffects.map((effect) => (
+              <div
+                key={effect.id}
+                className={`catch-effect catch-effect--${effect.team}`}
+                style={
+                  {
+                    "--catch-from-x": `${effect.fromX}%`,
+                    "--catch-from-y": `${effect.fromY}%`,
+                    "--catch-mid-x": `${effect.midX}%`,
+                    "--catch-apex-y": `${effect.apexY}%`,
+                    "--catch-to-x": `${effect.toX}%`,
+                    "--catch-to-y": `${effect.toY}%`,
+                  } as CSSProperties
+                }
+                aria-hidden="true"
+              >
+                <span>❄</span><strong>{effect.text}</strong><i /><i /><i />
+              </div>
+            ))}
+
             {projectiles.map((projectile) => (
               <div
                 key={projectile.id}
                 className={`projectile projectile--${projectile.team}`}
-                style={{ "--projectile-lane": `${projectile.lane}%` } as CSSProperties}
+                style={
+                  {
+                    "--projectile-from-x": `${projectile.fromX}%`,
+                    "--projectile-from-y": `${projectile.fromY}%`,
+                    "--projectile-mid-x": `${projectile.midX}%`,
+                    "--projectile-apex-y": `${projectile.apexY}%`,
+                    "--projectile-to-x": `${projectile.toX}%`,
+                    "--projectile-to-y": `${projectile.toY}%`,
+                  } as CSSProperties
+                }
                 aria-hidden="true"
               >
                 <span>{projectile.text}</span>
