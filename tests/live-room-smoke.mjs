@@ -87,7 +87,7 @@ class RoomClient {
   }
 }
 
-const hostIdentity = credentials("房主测试");
+const hostIdentity = credentials("阿澄");
 const createResponse = await fetch(`${baseUrl}/api/rooms`, {
   method: "POST",
   headers: { "content-type": "application/json" },
@@ -107,6 +107,17 @@ try {
   const guestWelcome = await guest.connect();
   assert.equal(hostWelcome.snapshot.selfPlayerId, "pine-0");
   assert.notEqual(guestWelcome.snapshot.selfPlayerId, hostWelcome.snapshot.selfPlayerId);
+  assert.equal(hostWelcome.snapshot.players.find((player) => player.id === "pine-0")?.name, "阿澄");
+  assert.equal(hostWelcome.snapshot.players.find((player) => player.id === "pine-1")?.name, "阿澄AI");
+  assert.equal(guestWelcome.snapshot.players.find((player) => player.id === guestWelcome.snapshot.selfPlayerId)?.name, "好友测试");
+
+  guest.send({ op: "lobby.move", playerId: guestWelcome.snapshot.selfPlayerId, direction: 1 });
+  const guestMoved = await guest.waitFor((message) => message.type === "snapshot"
+    && message.snapshot.players.find((player) => player.id === guestWelcome.snapshot.selfPlayerId)?.position === 1);
+  guest.send({ op: "lobby.move", playerId: guestWelcome.snapshot.selfPlayerId, direction: -1 });
+  await guest.waitFor((message) => message.type === "snapshot"
+    && message.snapshot.players.find((player) => player.id === guestWelcome.snapshot.selfPlayerId)?.position === 0
+    && message.snapshot.revision > guestMoved.snapshot.revision);
 
   host.send({ op: "lobby.set_config", config: { pineSize: 1, berrySize: 1, snowfallLevel: "light" } });
   await host.waitFor((message) => message.type === "snapshot" && message.snapshot.config.pineSize === 1 && message.snapshot.config.berrySize === 1);
@@ -146,6 +157,7 @@ try {
     guestPlayerId: guestWelcome.snapshot.selfPlayerId,
     claimedWord: word.text,
     damage: hit.event.actualDamage,
+    guestMovedOwnSeat: true,
     synchronizedRevision: guestSynced.snapshot.revision,
   }, null, 2));
 } finally {
