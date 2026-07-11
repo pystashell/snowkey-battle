@@ -1,14 +1,18 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-async function render() {
+async function render(acceptLanguage, cookie) {
   const workerUrl = new URL("../dist/server/index.js", import.meta.url);
   workerUrl.searchParams.set("test", `${process.pid}-${Date.now()}`);
   const { default: worker } = await import(workerUrl.href);
 
   return worker.fetch(
     new Request("http://localhost/", {
-      headers: { accept: "text/html" },
+      headers: {
+        accept: "text/html",
+        "accept-language": acceptLanguage,
+        ...(cookie ? { cookie } : {}),
+      },
     }),
     {
       ASSETS: {
@@ -22,8 +26,8 @@ async function render() {
   );
 }
 
-test("server-renders the snow fighting game", async () => {
-  const response = await render();
+test("server-renders the Chinese snow fighting game for a Chinese browser", async () => {
+  const response = await render("zh-CN,zh;q=0.9,en;q=0.8");
   assert.equal(response.status, 200);
   assert.match(response.headers.get("content-type") ?? "", /^text\/html\b/i);
 
@@ -43,7 +47,32 @@ test("server-renders the snow fighting game", async () => {
   assert.match(html, /考研英语 · 阅读精选/);
   assert.match(html, /经典情景英语 · 入门/);
   assert.match(html, /aria-label="选择雪花密度"/);
-  assert.match(html, /普通伤害 10 \/ 11 \/ 12 \/ 13 · 冰晶 15 \+ 冻结 1 秒/);
-  assert.match(html, /永远攻击最前排/);
+  assert.match(html, /普通伤害 10 \/ 11 \/ 12 \/ 13 · 冰晶群伤 15 \+ 全体冻结 1 秒/);
+  assert.match(html, /新雪球锁定当前前排/);
+  assert.match(html, /全员 100 HP/);
+  assert.doesNotMatch(html, /肉盾|快手|职业与速度/);
   assert.doesNotMatch(html, /codex-preview|react-loading-skeleton|Your site is taking shape/i);
+});
+
+test("server-renders the complete English lobby for a non-Chinese browser", async () => {
+  const response = await render("en-US,en;q=0.9");
+  assert.equal(response.status, 200);
+  const html = await response.text();
+  assert.match(html, /<html lang="en"/);
+  assert.match(html, /<title>Riverbank Snow Battle/);
+  assert.match(html, /Race to type English words/);
+  assert.match(html, /Online with Friends/);
+  assert.match(html, /Start with This Formation/);
+  assert.match(html, /Pine team size/);
+  assert.match(html, /CET-6 · Advanced Selection/);
+  assert.match(html, /Frost area damage 15 \+ 1-second team freeze/);
+  assert.match(html, /Everyone has 100 HP/);
+  assert.match(html, /语言 \/ Language/);
+});
+
+test("the language cookie overrides the browser language", async () => {
+  const response = await render("zh-CN", "snow_battle_language=en");
+  const html = await response.text();
+  assert.match(html, /<html lang="en"/);
+  assert.match(html, /Set your formation/);
 });

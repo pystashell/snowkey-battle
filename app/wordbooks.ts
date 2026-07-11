@@ -10,9 +10,13 @@ export type WordbookId =
 export type Wordbook = {
   id: WordbookId;
   label: string;
+  labelEn: string;
   shortLabel: string;
+  shortLabelEn: string;
   description: string;
+  descriptionEn: string;
   sourceNote: string;
+  sourceNoteEn: string;
   words: readonly string[];
 };
 
@@ -131,57 +135,85 @@ export const WORD_BOOKS: Record<WordbookId, Wordbook> = {
   winter: {
     id: "winter",
     label: "冬日基础",
+    labelEn: "Winter Basics",
     shortLabel: "冬日基础",
+    shortLabelEn: "Winter Basics",
     description: "雪景、服装、天气与节日主题，单词较短，适合熟悉玩法。",
+    descriptionEn: "Short words about snow, clothing, weather, and holidays. A friendly place to learn the game.",
     sourceNote: "游戏原创主题词包",
+    sourceNoteEn: "Original themed game word pack",
     words: winterWords,
   },
   cet4: {
     id: "cet4",
     label: "大学四级 · 常用精选",
+    labelEn: "CET-4 · Core Selection",
     shortLabel: "四级精选",
+    shortLabelEn: "CET-4",
     description: "校园、社会与学术场景中的常用词，整体长度和难度更高。",
+    descriptionEn: "Common campus, social, and academic vocabulary with moderately longer words.",
     sourceNote: "自主整理，非官方考试词表",
+    sourceNoteEn: "Independent selection, not an official exam list",
     words: cet4Words,
   },
   cet6: {
     id: "cet6",
     label: "大学六级 · 进阶精选",
+    labelEn: "CET-6 · Advanced Selection",
     shortLabel: "六级精选",
+    shortLabelEn: "CET-6",
     description: "偏重学术阅读、社会议题与抽象表达，长词更多，适合进阶打字挑战。",
+    descriptionEn: "Academic reading, social topics, and abstract expression with more long words.",
     sourceNote: "自主精选，非官方考试词表",
+    sourceNoteEn: "Independent selection, not an official exam list",
     words: cet6Words,
   },
   postgraduate: {
     id: "postgraduate",
     label: "考研英语 · 阅读精选",
+    labelEn: "Postgraduate English · Reading",
     shortLabel: "考研精选",
+    shortLabelEn: "Postgraduate",
     description: "覆盖研究阅读、人文社科与复杂论证语境，整体难度和长词比例最高。",
+    descriptionEn: "Research reading, humanities, social sciences, and complex argumentation with the highest difficulty.",
     sourceNote: "自主精选，不复制特定教材词表",
+    sourceNoteEn: "Independent selection, not copied from a textbook",
     words: postgraduateWords,
   },
   conceptStarter: {
     id: "conceptStarter",
     label: "经典情景英语 · 入门",
+    labelEn: "Classic Situational English · Starter",
     shortLabel: "情景入门",
+    shortLabelEn: "Situational Starter",
     description: "日常人物、地点、动作和时间表达，按循序渐进的课文式场景整理。",
+    descriptionEn: "Everyday people, places, actions, and time expressions arranged as progressive scenes.",
     sourceNote: "独立整理，不复制特定教材词表",
+    sourceNoteEn: "Independently organized, not copied from a textbook",
     words: conceptStarterWords,
   },
   conceptProgress: {
     id: "conceptProgress",
     label: "经典情景英语 · 进阶",
+    labelEn: "Classic Situational English · Advanced",
     shortLabel: "情景进阶",
+    shortLabelEn: "Situational Advanced",
     description: "故事叙述、旅行和社会场景常用词，长词比例更高。",
+    descriptionEn: "Vocabulary for storytelling, travel, and social situations, with a larger share of long words.",
     sourceNote: "独立整理，不复制特定教材词表",
+    sourceNoteEn: "Independently organized, not copied from a textbook",
     words: conceptProgressWords,
   },
   mixed: {
     id: "mixed",
     label: "全词库混合挑战",
+    labelEn: "Mixed Wordbook Challenge",
     shortLabel: "混合挑战",
+    shortLabelEn: "Mixed Challenge",
     description: "从所有内置词包中随机抽取，变化最大，也最不容易遇到重复。",
+    descriptionEn: "Draws from every built-in pack for the widest variety and the fewest repeats.",
     sourceNote: "合并全部内置精选词包",
+    sourceNoteEn: "Combines every built-in curated word pack",
     words: mixedWords,
   },
 };

@@ -1,7 +1,6 @@
 import type {
   AiLevel,
   PendingAttack,
-  PlayerRole,
   RoomCommand,
   RoomConfig,
   RoomEvent,
@@ -30,6 +29,7 @@ const FROST_WORD_MIN_LENGTH = 11;
 const FROST_SPAWN_CHANCE = 0.08;
 const FROST_DAMAGE = 15;
 const FROST_FREEZE_MS = 1_000;
+const PLAYER_MAX_HEALTH = 100;
 
 type RandomSource = () => number;
 
@@ -39,8 +39,6 @@ type SeatSpec = {
   slot: number;
   name: string;
   badge: string;
-  role: PlayerRole;
-  maxHealth: number;
   aiLevel: AiLevel;
 };
 
@@ -141,14 +139,14 @@ type DueTask = {
 };
 
 const SEATS: SeatSpec[] = [
-  { id: "pine-0", team: "pine", slot: 0, name: "小雪球", badge: "雪", role: "balanced", maxHealth: 90, aiLevel: "steady" },
-  { id: "pine-1", team: "pine", slot: 1, name: "阿澄", badge: "澄", role: "tank", maxHealth: 125, aiLevel: "rookie" },
-  { id: "pine-2", team: "pine", slot: 2, name: "米糕", badge: "糕", role: "balanced", maxHealth: 95, aiLevel: "steady" },
-  { id: "pine-3", team: "pine", slot: 3, name: "小北", badge: "北", role: "striker", maxHealth: 72, aiLevel: "expert" },
-  { id: "berry-0", team: "berry", slot: 0, name: "团子", badge: "团", role: "tank", maxHealth: 130, aiLevel: "rookie" },
-  { id: "berry-1", team: "berry", slot: 1, name: "柚子", badge: "柚", role: "balanced", maxHealth: 94, aiLevel: "steady" },
-  { id: "berry-2", team: "berry", slot: 2, name: "阿满", badge: "满", role: "striker", maxHealth: 70, aiLevel: "expert" },
-  { id: "berry-3", team: "berry", slot: 3, name: "星星", badge: "星", role: "balanced", maxHealth: 100, aiLevel: "steady" },
+  { id: "pine-0", team: "pine", slot: 0, name: "小雪球", badge: "雪", aiLevel: "steady" },
+  { id: "pine-1", team: "pine", slot: 1, name: "阿澄", badge: "澄", aiLevel: "rookie" },
+  { id: "pine-2", team: "pine", slot: 2, name: "米糕", badge: "糕", aiLevel: "steady" },
+  { id: "pine-3", team: "pine", slot: 3, name: "小北", badge: "北", aiLevel: "expert" },
+  { id: "berry-0", team: "berry", slot: 0, name: "团子", badge: "团", aiLevel: "rookie" },
+  { id: "berry-1", team: "berry", slot: 1, name: "柚子", badge: "柚", aiLevel: "steady" },
+  { id: "berry-2", team: "berry", slot: 2, name: "阿满", badge: "满", aiLevel: "expert" },
+  { id: "berry-3", team: "berry", slot: 3, name: "星星", badge: "星", aiLevel: "steady" },
 ];
 
 const AI_LEVELS: Record<AiLevel, { reaction: [number, number]; charMs: [number, number] }> = {
@@ -254,9 +252,8 @@ function makeSeat(spec: SeatSpec, active: boolean): InternalPlayer {
     team: spec.team,
     position: spec.slot,
     badge: spec.badge,
-    role: spec.role,
-    maxHealth: spec.maxHealth,
-    health: spec.maxHealth,
+    maxHealth: PLAYER_MAX_HEALTH,
+    health: PLAYER_MAX_HEALTH,
     claims: 0,
     damage: 0,
     combo: 0,
@@ -297,9 +294,23 @@ export class RoomEngine {
 
   private constructor(state: EngineState, options: RoomEngineOptions = {}) {
     this.state = state;
-    for (const player of this.state.players) player.frozenUntil ??= 0;
+    for (const player of this.state.players) {
+      player.frozenUntil ??= 0;
+      const previousMaximum = Number.isFinite(player.maxHealth) && player.maxHealth > 0
+        ? player.maxHealth
+        : PLAYER_MAX_HEALTH;
+      const healthRatio = clamp(player.health / previousMaximum, 0, 1);
+      player.maxHealth = PLAYER_MAX_HEALTH;
+      player.health = player.health <= 0
+        ? 0
+        : clamp(Math.round(healthRatio * PLAYER_MAX_HEALTH), 1, PLAYER_MAX_HEALTH);
+      delete (player as InternalPlayer & { role?: unknown }).role;
+    }
     for (const word of this.state.words) word.kind ??= "normal";
-    for (const attack of this.state.pendingAttacks) attack.kind ??= "normal";
+    for (const attack of this.state.pendingAttacks) {
+      attack.kind ??= "normal";
+      attack.targetIds ??= attack.targetId ? [attack.targetId] : [];
+    }
     this.random = options.random ?? Math.random;
     const supplied = options.wordbooks ?? {};
     const winter = sanitizeWords(supplied.winter ?? DEFAULT_WORDBOOKS.winter);
@@ -392,7 +403,7 @@ export class RoomEngine {
       players: activePlayers,
       words: clone(this.state.words),
       typingByPlayer,
-      pendingAttacks: clone(this.state.phase === "playing" ? this.state.pendingAttacks.filter((attack) => !attack.resolved) : []),
+      pendingAttacks: clone(this.state.pendingAttacks.filter((attack) => !attack.resolved)),
       selfPlayerId: self?.id ?? null,
       hostPlayerId: this.state.hostPlayerId,
       countdownEndsAt: this.state.countdownEndsAt,
@@ -626,7 +637,6 @@ export class RoomEngine {
       team: player.team,
       position: player.position,
       badge: player.badge,
-      role: player.role,
       maxHealth: player.maxHealth,
       health: player.health,
       claims: player.claims,
@@ -975,7 +985,13 @@ export class RoomEngine {
     attacker.claims += 1;
     const startsAt = Math.max(now, attacker.actorNextAt || now);
     attacker.actorNextAt = startsAt + ACTOR_QUEUE_INTERVAL_MS;
-    const target = this.frontline(attacker.team === "pine" ? "berry" : "pine");
+    const targetTeam: Team = attacker.team === "pine" ? "berry" : "pine";
+    const targets = word.kind === "frost"
+      ? this.activePlayers(targetTeam)
+        .filter((player) => player.health > 0)
+        .sort((left, right) => left.position - right.position)
+      : [this.frontline(targetTeam)].filter((player): player is InternalPlayer => Boolean(player));
+    const target = targets[0] ?? null;
     const claimId = `claim-${this.state.nextClaimId++}`;
     const attackId = `attack-${this.state.nextAttackId++}`;
     const attack: PendingAttack = {
@@ -983,6 +999,7 @@ export class RoomEngine {
       claimId,
       attackerId: attacker.id,
       targetId: target?.id ?? null,
+      targetIds: targets.map((candidate) => candidate.id),
       word: word.text,
       kind: word.kind,
       damage,
@@ -1002,6 +1019,7 @@ export class RoomEngine {
       word: clone(word),
       attackerId: attacker.id,
       targetId: target?.id ?? null,
+      targetIds: attack.targetIds,
       damage,
       startsAt: attack.startsAt,
       throwAt: attack.throwAt,
@@ -1029,10 +1047,12 @@ export class RoomEngine {
       for (const word of this.state.words) {
         if (word.aiClaimAt !== null) tasks.push({ at: word.aiClaimAt, priority: 2, kind: "ai", id: String(word.id) });
       }
+      if (this.state.nextSpawnAt !== null) tasks.push({ at: this.state.nextSpawnAt, priority: 4, kind: "spawn", id: "spawn" });
+    }
+    if (this.state.phase === "playing" || this.state.phase === "ended") {
       for (const attack of this.state.pendingAttacks) {
         if (!attack.resolved) tasks.push({ at: attack.resolveAt, priority: 3, kind: "attack", id: attack.id });
       }
-      if (this.state.nextSpawnAt !== null) tasks.push({ at: this.state.nextSpawnAt, priority: 4, kind: "spawn", id: "spawn" });
     }
     return tasks.sort((left, right) => {
       const timeOrder = left.at - right.at || left.priority - right.priority;
@@ -1096,49 +1116,87 @@ export class RoomEngine {
     }
     if (task.kind === "attack") {
       const attack = this.state.pendingAttacks.find((candidate) => candidate.id === task.id);
-      if (!attack || attack.resolved || attack.resolveAt !== task.at || this.state.phase !== "playing") return;
+      if (
+        !attack
+        || attack.resolved
+        || attack.resolveAt !== task.at
+        || (this.state.phase !== "playing" && this.state.phase !== "ended")
+      ) return;
       const attacker = this.state.players.find((player) => player.id === attack.attackerId);
-      const attackerAlive = Boolean(attacker && attacker.active && attacker.health > 0);
-      const targetTeam: Team | null = attackerAlive && attacker
+      const targetTeam: Team | null = attacker?.active
         ? attacker.team === "pine" ? "berry" : "pine"
         : null;
-      const target = targetTeam ? this.frontline(targetTeam) : null;
       attack.resolved = true;
-      attack.targetId = target?.id ?? null;
-      let actualDamage = 0;
-      let frozenUntil: number | null = null;
-      if (attackerAlive && attacker && target) {
-        actualDamage = Math.min(target.health, attack.damage);
-        target.health -= actualDamage;
-        attacker.damage += actualDamage;
-        if (target.health <= 0) {
-          target.frozenUntil = 0;
-          for (const queuedAttack of this.state.pendingAttacks) {
-            if (
-              !queuedAttack.resolved
-              && queuedAttack.attackerId === target.id
-            ) queuedAttack.resolved = true;
+      const lockedTargetIds = attack.kind === "frost"
+        ? attack.targetIds
+        : attack.targetIds.slice(0, 1);
+      const lockedTargets = targetTeam
+        ? lockedTargetIds
+          .map((targetId) => this.state.players.find((player) => player.id === targetId))
+          .filter((target): target is InternalPlayer => Boolean(
+            target
+            && target.active
+            && target.team === targetTeam,
+          ))
+        : [];
+      const hits = [] as Extract<RoomEvent, { type: "attack.resolved" }>["hits"];
+      if (attacker?.active) {
+        for (const target of lockedTargets) {
+          if (target.health <= 0) continue;
+          const actualDamage = Math.min(target.health, attack.damage);
+          target.health -= actualDamage;
+          attacker.damage += actualDamage;
+          let frozenUntil: number | null = null;
+          if (target.health <= 0) {
+            target.frozenUntil = 0;
+            for (const queuedAttack of this.state.pendingAttacks) {
+              if (
+                !queuedAttack.resolved
+                && queuedAttack.attackerId === target.id
+                && queuedAttack.throwAt > task.at
+              ) queuedAttack.resolved = true;
+            }
+          } else if (attack.kind === "frost") {
+            frozenUntil = this.freezePlayer(target, task.at);
           }
-        } else if (attack.kind === "frost") {
-          frozenUntil = this.freezePlayer(target, task.at);
+          hits.push({
+            targetId: target.id,
+            actualDamage,
+            targetHealth: target.health,
+            frozenUntil,
+          });
         }
       }
       let winner: Team | null = null;
-      if (attackerAlive && attacker && target && !this.frontline(target.team)) {
+      if (
+        this.state.phase === "playing"
+        && attacker?.active
+        && targetTeam
+        && !this.frontline(targetTeam)
+      ) {
         winner = attacker.team;
         this.state.phase = "ended";
         this.state.winner = winner;
         this.state.nextSpawnAt = null;
+        for (const queuedAttack of this.state.pendingAttacks) {
+          if (!queuedAttack.resolved && queuedAttack.throwAt > task.at) queuedAttack.resolved = true;
+        }
       }
+      const primaryTarget = attack.targetId
+        ? this.state.players.find((player) => player.id === attack.targetId) ?? null
+        : null;
+      const primaryHit = hits.find((hit) => hit.targetId === attack.targetId) ?? hits[0] ?? null;
       this.emit(events, {
         type: "attack.resolved",
         attackId: attack.id,
         attackerId: attack.attackerId,
-        targetId: target?.id ?? null,
-        actualDamage,
-        targetHealth: target?.health ?? null,
-        frozenUntil,
-        missed: !attackerAlive || !target,
+        kind: attack.kind,
+        hits,
+        targetId: attack.targetId,
+        actualDamage: primaryHit?.actualDamage ?? 0,
+        targetHealth: primaryHit?.targetHealth ?? primaryTarget?.health ?? null,
+        frozenUntil: primaryHit?.frozenUntil ?? null,
+        missed: hits.length === 0,
         winner,
       });
       if (winner) this.emit(events, { type: "match.ended", winner });

@@ -10,7 +10,7 @@
     "build": "vinext build",
     "start": "wrangler dev --config dist/server/wrangler.json",
     "preview": "npm run build && npm run start",
-    "test": "npm run typecheck && npm run build && node --test tests/rendered-html.test.mjs && npm run test:engine",
+    "test": "npm run typecheck && npm run build && node --experimental-strip-types --test tests/language.test.mjs && node --test tests/rendered-html.test.mjs && npm run test:engine",
     "test:engine": "node --experimental-strip-types --test tests/room-engine.test.mjs",
     "test:live": "node tests/live-room-smoke.mjs",
     "lint": "eslint . --ignore-pattern dist --ignore-pattern .next --ignore-pattern worker-configuration.d.ts",

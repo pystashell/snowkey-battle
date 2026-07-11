@@ -76,6 +76,8 @@ test("creates a six-character room with eight stable seats and admits at most ei
   assert.equal(full.players.filter((player) => player.controller.kind === "human").length, 8);
   assert.equal(full.players.filter((player) => player.team === "pine").length, 4);
   assert.equal(full.players.filter((player) => player.team === "berry").length, 4);
+  assert.ok(full.players.every((player) => player.maxHealth === 100 && player.health === 100));
+  assert.ok(engine.serialize().state.players.every((player) => player.maxHealth === 100));
 
   const ninth = join(engine, 8, 11);
   assert.equal(ninth.ok, false);
@@ -267,7 +269,7 @@ test("each match starts with one visible frost word and never keeps two frost wo
   assert.equal(snapshot.words.filter((word) => word.kind === "frost").length, 1);
 });
 
-test("a frost word deals 15 damage and freezes the surviving frontline for exactly one second", () => {
+test("a frost word deals 15 area damage and freezes every surviving opponent for exactly one second", () => {
   const engine = createEngine({
     words: ["snow", "river", "planet", "accountability", "counterpoint"],
   });
@@ -275,13 +277,17 @@ test("a frost word deals 15 damage and freezes the surviving frontline for exact
   assert.equal(guest.ok, true);
   const configured = engine.handleCommand(
     HOST_SESSION,
-    { op: "lobby.set_config", config: { pineSize: 1, berrySize: 1 } },
+    { op: "lobby.set_config", config: { pineSize: 1, berrySize: 3 } },
     11,
   );
   assert.equal(configured.ok, true);
   const startedAt = start(engine, ["guest-1"], 100);
   const frostWord = engine.snapshot(startedAt).words.find((word) => word.kind === "frost");
   assert.ok(frostWord);
+  const opponentsBefore = engine.snapshot(startedAt).players
+    .filter((player) => player.team === "berry")
+    .sort((left, right) => left.position - right.position);
+  assert.equal(opponentsBefore.length, 3);
 
   const claim = typeWord(engine, HOST_SESSION, frostWord.text, startedAt + 1);
   assert.equal(claim.events[0]?.type, "word.claimed");
@@ -289,10 +295,20 @@ test("a frost word deals 15 damage and freezes the surviving frontline for exact
   const resolveAt = claim.events[0].resolveAt;
   const resolved = engine.advance(resolveAt);
   assert.equal(resolved.events[0]?.type, "attack.resolved");
+  assert.equal(resolved.events[0]?.kind, "frost");
+  assert.deepEqual(resolved.events[0]?.hits.map((hit) => hit.targetId), opponentsBefore.map((player) => player.id));
+  assert.equal(resolved.events[0]?.hits.length, 3);
+  assert.ok(resolved.events[0]?.hits.every((hit) => hit.actualDamage === ROOM_ENGINE_CONSTANTS.frostDamage));
+  assert.ok(resolved.events[0]?.hits.every((hit) => hit.frozenUntil === resolveAt + ROOM_ENGINE_CONSTANTS.frostFreezeMs));
   assert.equal(resolved.events[0]?.actualDamage, ROOM_ENGINE_CONSTANTS.frostDamage);
   assert.equal(resolved.events[0]?.frozenUntil, resolveAt + ROOM_ENGINE_CONSTANTS.frostFreezeMs);
-  assert.equal(engine.snapshot(resolveAt).players.find((player) => player.id === guest.playerId)?.frozenUntil,
-    resolveAt + ROOM_ENGINE_CONSTANTS.frostFreezeMs);
+  const afterImpact = engine.snapshot(resolveAt);
+  assert.ok(afterImpact.players
+    .filter((player) => player.team === "berry")
+    .every((player) => player.health === player.maxHealth - ROOM_ENGINE_CONSTANTS.frostDamage
+      && player.frozenUntil === resolveAt + ROOM_ENGINE_CONSTANTS.frostFreezeMs));
+  assert.equal(afterImpact.players.find((player) => player.id === "pine-0")?.damage,
+    ROOM_ENGINE_CONSTANTS.frostDamage * 3);
 
   const blocked = engine.handleCommand("guest-1", { op: "type.key", key: "s" }, resolveAt + 999);
   assert.equal(blocked.ok, true);
@@ -412,7 +428,7 @@ test("three words completed quickly create three attacks spaced by 1.85 seconds"
   assert.equal(new Set(attacks.map((attack) => attack.id)).size, 3);
 });
 
-test("knocking out an attacker cancels every queued snowball that has not landed", () => {
+test("knocking out an attacker preserves an in-flight snowball but cancels every unthrown snowball", () => {
   let engine = createEngine({ words: ["snow", "star", "river", "planet", "cocoa", "winter"] });
   const guest = join(engine, 1, 10);
   assert.equal(guest.ok, true);
@@ -466,12 +482,26 @@ test("knocking out an attacker cancels every queued snowball that has not landed
   );
 
   const afterKnockout = engine.serialize().state.pendingAttacks;
-  assert.ok(afterKnockout
+  const hostAfterKnockout = afterKnockout
     .filter((attack) => attack.attackerId === host.id)
-    .every((attack) => attack.resolved));
+    .sort((left, right) => left.resolveAt - right.resolveAt);
+  assert.equal(hostAfterKnockout[0].resolved, false);
+  assert.ok(hostAfterKnockout.slice(1).every((attack) => attack.resolved));
+  assert.equal(engine.snapshot(guestAttack.resolveAt).pendingAttacks
+    .filter((attack) => attack.attackerId === host.id).length, 1);
+
+  const inFlightHit = engine.advance(hostAfterKnockout[0].resolveAt);
+  assert.equal(inFlightHit.events[0]?.type, "attack.resolved");
+  assert.equal(inFlightHit.events[0]?.attackerId, host.id);
+  assert.equal(inFlightHit.events[0]?.missed, false);
+  assert.equal(inFlightHit.events[0]?.targetId, guest.playerId);
+  assert.equal(
+    engine.snapshot(hostAfterKnockout[0].resolveAt).players.find((player) => player.id === guest.playerId)?.health,
+    guestBeforeKnockout.health - hostAfterKnockout[0].damage,
+  );
 });
 
-test("damage uses the current frontline, clamps overkill, and advances to the next position", () => {
+test("a normal snowball hits only its locked frontline, clamps overkill, and exposes the next position", () => {
   let engine = createEngine({ words: ["snow", "star", "river", "planet"] });
   const configured = engine.handleCommand(HOST_SESSION, { op: "lobby.set_config", config: { pineSize: 1, berrySize: 2 } }, 1);
   assert.equal(configured.ok, true);
@@ -491,11 +521,82 @@ test("damage uses the current frontline, clamps overkill, and advances to the ne
   assert.equal(resolved.events[0].targetId, firstTargetId);
   assert.equal(resolved.events[0].actualDamage, 4);
   assert.equal(resolved.events[0].targetHealth, 0);
+  assert.equal(resolved.events[0].hits.length, 1);
 
   const nextFront = engine.snapshot(claim.events[0].resolveAt).players
     .filter((player) => player.team === "berry" && player.health > 0)
     .sort((left, right) => left.position - right.position)[0];
   assert.equal(nextFront.position, 1);
+});
+
+test("snowballs locked to a fallen frontline miss instead of retargeting, while a new claim locks the next player", () => {
+  let engine = createEngine({ words: ["snow", "star", "river", "planet", "cocoa", "winter", "quartz"] });
+  const configured = engine.handleCommand(
+    HOST_SESSION,
+    { op: "lobby.set_config", config: { pineSize: 3, berrySize: 2, snowfallLevel: "light" } },
+    1,
+  );
+  assert.equal(configured.ok, true);
+  for (let index = 1; index <= 4; index += 1) assert.equal(join(engine, index, 1 + index).ok, true);
+  const startedAt = start(engine, ["guest-1", "guest-2", "guest-3", "guest-4"], 100);
+  const spawned = [
+    engine.spawnWord(startedAt + 1, "lamp", "normal"),
+    engine.spawnWord(startedAt + 1, "quartz", "normal"),
+    engine.spawnWord(startedAt + 1, "harbor", "normal"),
+  ];
+  assert.ok(spawned.every(Boolean));
+
+  const claims = [
+    typeWord(engine, HOST_SESSION, "lamp", startedAt + 2),
+    typeWord(engine, "guest-2", "quartz", startedAt + 2),
+    typeWord(engine, "guest-4", "harbor", startedAt + 2),
+  ];
+  assert.ok(claims.every((claim) => claim.events[0]?.type === "word.claimed"));
+  assert.equal(new Set(claims.map((claim) => claim.events[0].targetId)).size, 1);
+  assert.equal(new Set(claims.map((claim) => claim.events[0].resolveAt)).size, 1);
+
+  const lockedTargetId = claims[0].events[0].targetId;
+  const serialized = engine.serialize();
+  const lockedTarget = serialized.state.players.find((player) => player.id === lockedTargetId);
+  const nextTarget = serialized.state.players
+    .filter((player) => player.team === "berry" && player.id !== lockedTargetId)
+    .sort((left, right) => left.position - right.position)[0];
+  assert.ok(lockedTarget);
+  assert.ok(nextTarget);
+  lockedTarget.health = 1;
+  const nextTargetHealth = nextTarget.health;
+  engine = RoomEngine.restore(serialized, {
+    random: () => 0.5,
+    wordbooks: { winter: ["snow", "star", "river", "planet", "cocoa", "winter", "quartz"] },
+  });
+
+  const impactAt = claims[0].events[0].resolveAt;
+  const events = [
+    engine.advance(impactAt).events[0],
+    engine.advance(impactAt).events[0],
+    engine.advance(impactAt).events[0],
+  ];
+  assert.equal(events[0]?.type, "attack.resolved");
+  assert.equal(events[0]?.targetId, lockedTargetId);
+  assert.equal(events[0]?.actualDamage, 1);
+  assert.equal(events[0]?.missed, false);
+  for (const missed of events.slice(1)) {
+    assert.equal(missed?.type, "attack.resolved");
+    assert.equal(missed?.targetId, lockedTargetId);
+    assert.equal(missed?.actualDamage, 0);
+    assert.equal(missed?.missed, true);
+    assert.deepEqual(missed?.hits, []);
+  }
+  assert.equal(
+    engine.snapshot(impactAt).players.find((player) => player.id === nextTarget.id)?.health,
+    nextTargetHealth,
+  );
+
+  const freshWord = engine.spawnWord(impactAt + 1, "signal", "normal");
+  assert.ok(freshWord);
+  const freshClaim = typeWord(engine, HOST_SESSION, freshWord.text, impactAt + 2);
+  assert.equal(freshClaim.events[0]?.type, "word.claimed");
+  assert.equal(freshClaim.events[0]?.targetId, nextTarget.id);
 });
 
 test("AI claims only at its authoritative deadline and wins an exact-time tie", () => {
@@ -561,4 +662,24 @@ test("serialized state restores snapshots and scheduled deadlines", () => {
   const after = restored.snapshot(30, "guest-1");
   assert.deepEqual(after, before);
   assert.equal(restored.nextDueAt(), 20 + ROOM_ENGINE_CONSTANTS.disconnectGraceMs);
+});
+
+test("restoring an old room migrates every role-based health pool to 100 HP proportionally", () => {
+  const engine = createEngine();
+  const serialized = engine.serialize();
+  serialized.state.players[0].maxHealth = 130;
+  serialized.state.players[0].health = 65;
+  serialized.state.players[0].role = "tank";
+  serialized.state.players[1].maxHealth = 70;
+  serialized.state.players[1].health = 0;
+  serialized.state.players[1].role = "striker";
+
+  const restored = RoomEngine.restore(serialized, {
+    random: () => 0.5,
+    wordbooks: { winter: TEST_BOOK },
+  });
+  const players = restored.serialize().state.players;
+  assert.ok(players.every((player) => player.maxHealth === 100 && !("role" in player)));
+  assert.equal(players[0].health, 50);
+  assert.equal(players[1].health, 0);
 });

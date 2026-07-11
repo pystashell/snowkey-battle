@@ -1,8 +1,8 @@
 export const GAME_PROTOCOL_VERSION = 1 as const;
+export const PLAYER_MAX_HEALTH = 100 as const;
 
 export type Team = "pine" | "berry";
 export type AiLevel = "rookie" | "steady" | "expert";
-export type PlayerRole = "tank" | "balanced" | "striker";
 export type SnowfallLevel = "light" | "classic" | "blizzard";
 export type SnowWordKind = "normal" | "frost";
 export type WordbookId =
@@ -32,7 +32,6 @@ export type RoomPlayer = {
   team: Team;
   position: number;
   badge: string;
-  role: PlayerRole;
   maxHealth: number;
   health: number;
   claims: number;
@@ -67,6 +66,7 @@ export type PendingAttack = {
   claimId: string;
   attackerId: string;
   targetId: string | null;
+  targetIds: string[];
   word: string;
   kind: SnowWordKind;
   damage: number;
@@ -74,6 +74,13 @@ export type PendingAttack = {
   throwAt: number;
   resolveAt: number;
   resolved: boolean;
+};
+
+export type AttackHit = {
+  targetId: string;
+  actualDamage: number;
+  targetHealth: number;
+  frozenUntil: number | null;
 };
 
 export type RoomSnapshot = {
@@ -103,6 +110,7 @@ export type RoomEvent =
       word: RoomWord;
       attackerId: string;
       targetId: string | null;
+      targetIds: string[];
       damage: number;
       startsAt: number;
       throwAt: number;
@@ -112,6 +120,8 @@ export type RoomEvent =
       type: "attack.resolved";
       attackId: string;
       attackerId: string;
+      kind: SnowWordKind;
+      hits: AttackHit[];
       targetId: string | null;
       actualDamage: number;
       targetHealth: number | null;

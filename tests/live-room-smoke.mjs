@@ -110,6 +110,7 @@ try {
   assert.equal(hostWelcome.snapshot.players.find((player) => player.id === "pine-0")?.name, "阿澄");
   assert.equal(hostWelcome.snapshot.players.find((player) => player.id === "pine-1")?.name, "阿澄AI");
   assert.equal(guestWelcome.snapshot.players.find((player) => player.id === guestWelcome.snapshot.selfPlayerId)?.name, "好友测试");
+  assert.ok(hostWelcome.snapshot.players.every((player) => player.maxHealth === 100 && player.health === 100));
 
   guest.send({ op: "lobby.move", playerId: guestWelcome.snapshot.selfPlayerId, direction: 1 });
   const guestMoved = await guest.waitFor((message) => message.type === "snapshot"
@@ -121,13 +122,13 @@ try {
 
   host.send({ op: "lobby.set_config", config: {
     pineSize: 1,
-    berrySize: 1,
+    berrySize: 2,
     snowfallLevel: "light",
     wordbookId: "postgraduate",
   } });
   await host.waitFor((message) => message.type === "snapshot"
     && message.snapshot.config.pineSize === 1
-    && message.snapshot.config.berrySize === 1
+    && message.snapshot.config.berrySize === 2
     && message.snapshot.config.wordbookId === "postgraduate");
 
   host.send({ op: "presence.ready", ready: true });
@@ -139,6 +140,10 @@ try {
   host.send({ op: "match.start" });
   const playing = await host.waitFor((message) => message.type === "snapshot" && message.snapshot.phase === "playing", 20_000);
   assert.ok(playing.snapshot.words.length > 0);
+  const berryBefore = playing.snapshot.players
+    .filter((player) => player.team === "berry")
+    .sort((left, right) => left.position - right.position);
+  assert.equal(berryBefore.length, 2);
   const word = playing.snapshot.words.find((candidate) => candidate.kind === "frost");
   assert.ok(word);
   for (const key of word.text) host.send({ op: "type.key", key });
@@ -152,12 +157,16 @@ try {
     && message.event.attackId === claim.event.attackId);
   assert.equal(hit.event.actualDamage, 15);
   assert.equal(typeof hit.event.frozenUntil, "number");
+  assert.equal(hit.event.kind, "frost");
+  assert.equal(hit.event.hits.length, 2);
+  assert.deepEqual(new Set(hit.event.hits.map((target) => target.targetId)), new Set(berryBefore.map((player) => player.id)));
+  assert.ok(hit.event.hits.every((target) => target.actualDamage === 15 && typeof target.frozenUntil === "number"));
 
   const guestSynced = await guest.waitFor((message) => message.type === "snapshot"
     && message.snapshot.revision >= hit.revision
-    && message.snapshot.players.some((player) => player.id === hit.event.targetId
-      && player.health === hit.event.targetHealth
-      && player.frozenUntil === hit.event.frozenUntil));
+    && hit.event.hits.every((target) => message.snapshot.players.some((player) => player.id === target.targetId
+      && player.health === target.targetHealth
+      && player.frozenUntil === target.frozenUntil)));
   assert.equal(guestSynced.snapshot.code, roomCode);
 
   host.send({ op: "presence.leave" });
@@ -169,7 +178,8 @@ try {
     guestPlayerId: guestWelcome.snapshot.selfPlayerId,
     claimedWord: word.text,
     damage: hit.event.actualDamage,
-    frozeGuestForOneSecond: true,
+    hitCount: hit.event.hits.length,
+    frozeWholeEnemyTeamForOneSecond: true,
     guestMovedOwnSeat: true,
     synchronizedRevision: guestSynced.snapshot.revision,
   }, null, 2));

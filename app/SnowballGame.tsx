@@ -4,6 +4,7 @@ import {
   type CSSProperties,
   type ChangeEvent,
   type KeyboardEvent,
+  type AnimationEvent as ReactAnimationEvent,
   useCallback,
   useEffect,
   useMemo,
@@ -11,10 +12,13 @@ import {
   useState,
 } from "react";
 import { OnlineLobby } from "./OnlineLobby";
+import { LanguageSwitcher, useLanguage } from "./LanguageContext";
+import type { UiLanguage } from "./language";
 import { useRoomSocket } from "./useRoomSocket";
 import { WORD_BOOKS, WORD_BOOK_OPTIONS, type WordbookId } from "./wordbooks";
 import {
   isRoomCode,
+  PLAYER_MAX_HEALTH,
   sanitizeRoomCode,
   type RoomEvent,
   type RoomPlayer,
@@ -26,7 +30,6 @@ import {
 type Team = "pine" | "berry";
 type Stage = "lobby" | "countdown" | "playing" | "paused" | "ended";
 type AiLevel = "rookie" | "steady" | "expert";
-type PlayerRole = "tank" | "balanced" | "striker";
 type SnowfallLevel = "light" | "classic" | "blizzard";
 type GameMode = "local" | "online";
 
@@ -37,7 +40,6 @@ type Player = {
   badge: string;
   slot: number;
   position: number;
-  role: PlayerRole;
   isUser?: boolean;
   active: boolean;
   aiLevel?: AiLevel;
@@ -132,26 +134,34 @@ const AI_LEVELS: Record<
   AiLevel,
   {
     label: string;
+    labelEn: string;
     short: string;
+    shortEn: string;
     reaction: [number, number];
     charMs: [number, number];
   }
 > = {
   rookie: {
     label: "新手 AI",
+    labelEn: "Rookie AI",
     short: "慢",
+    shortEn: "Slow",
     reaction: [1500, 2300],
     charMs: [430, 610],
   },
   steady: {
     label: "熟练 AI",
+    labelEn: "Skilled AI",
     short: "中",
+    shortEn: "Medium",
     reaction: [1000, 1650],
     charMs: [310, 450],
   },
   expert: {
     label: "高手 AI",
+    labelEn: "Expert AI",
     short: "快",
+    shortEn: "Fast",
     reaction: [650, 1150],
     charMs: [230, 340],
   },
@@ -162,11 +172,31 @@ const FROST_SPAWN_CHANCE = 0.08;
 const FROST_DAMAGE = 15;
 const FROST_FREEZE_MS = 1_000;
 
+const ENGLISH_ROOM_ERRORS: Record<string, string> = {
+  INVALID_NAME: "Enter your name before creating or joining a room.",
+  INVALID_ROOM_CODE: "The room code must contain 6 letters or numbers.",
+  ROOM_NOT_FOUND: "That room could not be found.",
+  ROOM_FULL: "That room already has 8 human players.",
+  NAME_TAKEN: "That name is already in use in this room.",
+  MATCH_IN_PROGRESS: "This match is already in progress.",
+  WRONG_STAGE: "That action is not available right now.",
+  NOT_HOST: "Only the host can change that setting.",
+  TEAM_HAS_HUMANS: "The team cannot be made smaller while a human occupies that seat.",
+  TEAM_FULL: "That team is full.",
+  SOCKET_CREATE_FAILED: "Could not establish a room connection.",
+  SOCKET_ERROR: "The room connection had a network error. Reconnecting…",
+  BAD_SERVER_MESSAGE: "The room server returned an invalid message.",
+  BAD_CREATE_RESPONSE: "The server did not return a valid room code.",
+  CREATE_ROOM_NETWORK: "Could not reach the room server.",
+};
+
 const SNOWFALL_PROFILES: Record<
   SnowfallLevel,
   {
     label: string;
+    labelEn: string;
     short: string;
+    shortEn: string;
     interval: [number, number];
     wordBonus: number;
     minimumWords: number;
@@ -176,7 +206,9 @@ const SNOWFALL_PROFILES: Record<
 > = {
   light: {
     label: "舒缓",
+    labelEn: "Light",
     short: "小雪",
+    shortEn: "Light snow",
     interval: [1400, 1900],
     wordBonus: 3,
     minimumWords: 5,
@@ -185,7 +217,9 @@ const SNOWFALL_PROFILES: Record<
   },
   classic: {
     label: "标准",
+    labelEn: "Classic",
     short: "标准雪",
+    shortEn: "Classic snow",
     interval: [850, 1250],
     wordBonus: 5,
     minimumWords: 7,
@@ -194,19 +228,15 @@ const SNOWFALL_PROFILES: Record<
   },
   blizzard: {
     label: "暴雪",
+    labelEn: "Blizzard",
     short: "暴雪",
+    shortEn: "Blizzard",
     interval: [520, 780],
     wordBonus: 7,
     minimumWords: 9,
     maximumWords: 14,
     initialWords: 7,
   },
-};
-
-const ROLE_LABELS: Record<PlayerRole, string> = {
-  tank: "肉盾",
-  balanced: "均衡",
-  striker: "快手",
 };
 
 const PLAYER_SEEDS: Array<Omit<Player, "active" | "position" | "health" | "claims" | "damage" | "frozenUntil">> = [
@@ -216,9 +246,8 @@ const PLAYER_SEEDS: Array<Omit<Player, "active" | "position" | "health" | "claim
     team: "pine",
     badge: "你",
     slot: 0,
-    role: "balanced",
     isUser: true,
-    maxHealth: 90,
+    maxHealth: PLAYER_MAX_HEALTH,
   },
   {
     id: "pine-1",
@@ -226,9 +255,8 @@ const PLAYER_SEEDS: Array<Omit<Player, "active" | "position" | "health" | "claim
     team: "pine",
     badge: "澄",
     slot: 1,
-    role: "tank",
     aiLevel: "rookie",
-    maxHealth: 125,
+    maxHealth: PLAYER_MAX_HEALTH,
   },
   {
     id: "pine-2",
@@ -236,9 +264,8 @@ const PLAYER_SEEDS: Array<Omit<Player, "active" | "position" | "health" | "claim
     team: "pine",
     badge: "糕",
     slot: 2,
-    role: "balanced",
     aiLevel: "steady",
-    maxHealth: 95,
+    maxHealth: PLAYER_MAX_HEALTH,
   },
   {
     id: "pine-3",
@@ -246,9 +273,8 @@ const PLAYER_SEEDS: Array<Omit<Player, "active" | "position" | "health" | "claim
     team: "pine",
     badge: "北",
     slot: 3,
-    role: "striker",
     aiLevel: "expert",
-    maxHealth: 72,
+    maxHealth: PLAYER_MAX_HEALTH,
   },
   {
     id: "berry-1",
@@ -256,9 +282,8 @@ const PLAYER_SEEDS: Array<Omit<Player, "active" | "position" | "health" | "claim
     team: "berry",
     badge: "团",
     slot: 0,
-    role: "tank",
     aiLevel: "rookie",
-    maxHealth: 130,
+    maxHealth: PLAYER_MAX_HEALTH,
   },
   {
     id: "berry-2",
@@ -266,9 +291,8 @@ const PLAYER_SEEDS: Array<Omit<Player, "active" | "position" | "health" | "claim
     team: "berry",
     badge: "柚",
     slot: 1,
-    role: "balanced",
     aiLevel: "steady",
-    maxHealth: 94,
+    maxHealth: PLAYER_MAX_HEALTH,
   },
   {
     id: "berry-3",
@@ -276,9 +300,8 @@ const PLAYER_SEEDS: Array<Omit<Player, "active" | "position" | "health" | "claim
     team: "berry",
     badge: "满",
     slot: 2,
-    role: "striker",
     aiLevel: "expert",
-    maxHealth: 70,
+    maxHealth: PLAYER_MAX_HEALTH,
   },
   {
     id: "berry-4",
@@ -286,9 +309,8 @@ const PLAYER_SEEDS: Array<Omit<Player, "active" | "position" | "health" | "claim
     team: "berry",
     badge: "星",
     slot: 3,
-    role: "balanced",
     aiLevel: "steady",
-    maxHealth: 100,
+    maxHealth: PLAYER_MAX_HEALTH,
   },
 ];
 
@@ -393,16 +415,51 @@ function createUniqueLocalAiName(baseName: string, usedNames: Set<string>) {
   return baseName;
 }
 
-function createLocalDisplayPlayers(players: Player[], playerName: string) {
+const ENGLISH_AI_NAMES: Record<string, string> = {
+  "pine-0": "Snowball",
+  "pine-1": "Cheng",
+  "pine-2": "Ricecake",
+  "pine-3": "Bei",
+  "berry-0": "Dumpling",
+  "berry-1": "Pomelo",
+  "berry-2": "Man",
+  "berry-3": "Star",
+  "berry-4": "Star",
+};
+
+const ENGLISH_SEED_NAMES: Record<string, string> = {
+  小雪球: "Snowball",
+  阿澄: "Cheng",
+  米糕: "Ricecake",
+  小北: "Bei",
+  团子: "Dumpling",
+  柚子: "Pomelo",
+  阿满: "Man",
+  星星: "Star",
+};
+
+function createLocalDisplayPlayers(players: Player[], playerName: string, language: UiLanguage) {
   const active = players.filter((player) => player.active);
-  const userName = playerName.trim() || "小雪球";
+  const userName = playerName.trim() || (language === "zh" ? "小雪球" : "Snowball");
   const usedNames = new Set(active.filter((player) => player.isUser).map(() => nameKey(userName)));
   return active.map((player) => {
     if (player.isUser) return { ...player, name: userName };
-    const baseName = PLAYER_SEEDS.find((seed) => seed.id === player.id)?.name ?? player.name;
+    const seedName = PLAYER_SEEDS.find((seed) => seed.id === player.id)?.name ?? player.name;
+    const baseName = language === "en"
+      ? ENGLISH_SEED_NAMES[seedName] ?? seedName
+      : seedName;
     const uniqueName = createUniqueLocalAiName(baseName, usedNames);
     usedNames.add(nameKey(uniqueName));
     return uniqueName === player.name ? player : { ...player, name: uniqueName };
+  });
+}
+
+function localizeOnlinePlayers(players: Player[], language: UiLanguage) {
+  if (language === "zh") return players;
+  return players.map((player) => {
+    if (player.controllerKind === "human") return player;
+    const name = ENGLISH_AI_NAMES[player.id];
+    return name ? { ...player, name } : player;
   });
 }
 
@@ -426,7 +483,6 @@ function mapRoomPlayer(player: RoomPlayer, selfPlayerId: string | null, serverTi
     badge: player.badge,
     slot: player.position,
     position: player.position,
-    role: player.role,
     isUser: player.id === selfPlayerId,
     active: true,
     aiLevel: player.controller.kind === "ai" ? player.controller.level : undefined,
@@ -518,6 +574,7 @@ function Kid({
   isFront,
   isFrozen,
   finale,
+  onDefeatAnimationEnd,
   nodeRef,
 }: {
   player: Player;
@@ -525,18 +582,20 @@ function Kid({
   isFront: boolean;
   isFrozen: boolean;
   finale?: "cheer" | "defeat";
+  onDefeatAnimationEnd?: () => void;
   nodeRef?: (node: HTMLDivElement | null) => void;
 }) {
+  const { text } = useLanguage();
   const phase = action.phase === "hit" ? "hit" : finale ?? action.phase;
   const palette = getPlayerPalette(player);
   const actionLabel: Partial<Record<CharacterPhase, string>> = {
-    catch: "抓住！",
-    hold: "捏雪球…",
-    windup: "蓄力！",
-    throw: "扔！",
-    hit: "哎呀！",
-    cheer: "好耶！",
-    defeat: "出局",
+    catch: text("抓住！", "Caught!"),
+    hold: text("捏雪球…", "Packing…"),
+    windup: text("蓄力！", "Wind up!"),
+    throw: text("扔！", "Throw!"),
+    hit: text("哎呀！", "Ouch!"),
+    cheer: text("好耶！", "Hooray!"),
+    defeat: text("出局", "Knocked out"),
   };
   const healthPercent = (player.health / player.maxHealth) * 100;
 
@@ -555,11 +614,25 @@ function Kid({
           "--formation-scale": FORMATION_SCALE[player.position],
         } as CSSProperties
       }
-      aria-label={`${player.name}，${player.health}/${player.maxHealth} 点血量，${isFrozen ? "冻结中" : actionLabel[phase] ?? "准备中"}`}
+      aria-label={text(
+        `${player.name}，${player.health}/${player.maxHealth} 点血量，${isFrozen ? "冻结中" : actionLabel[phase] ?? "准备中"}`,
+        `${player.name}, ${player.health}/${player.maxHealth} health, ${isFrozen ? "frozen" : actionLabel[phase] ?? "ready"}`,
+      )}
     >
       <span className="kid__shadow" aria-hidden="true" />
       <div className="kid__scale">
-        <div className="kid__figure" key={`${action.token}-${phase}`}>
+        <div
+          className="kid__figure"
+          key={`${action.token}-${phase}`}
+          onAnimationEnd={(event: ReactAnimationEvent<HTMLDivElement>) => {
+            if (
+              phase === "defeat"
+              && player.health <= 0
+              && event.animationName === "kid-defeat"
+              && event.target === event.currentTarget
+            ) onDefeatAnimationEnd?.();
+          }}
+        >
           <span className="kid__leg kid__leg--back"><i /></span>
           <span className="kid__leg kid__leg--front"><i /></span>
           <span className="kid__arm kid__arm--back"><i className="kid__mitten" /></span>
@@ -574,9 +647,9 @@ function Kid({
           <span className="kid__arm kid__arm--front"><i className="kid__mitten" /></span>
           <span className={`kid__held-ball${action.kind === "frost" ? " is-frost" : ""}`}><i>{action.word}</i></span>
           <span className="kid__impact" aria-hidden="true">
-            <i /><i /><i /><i /><i /><b>啪!</b>
+            <i /><i /><i /><i /><i /><b>{text("啪!", "POW!")}</b>
           </span>
-          <span className="kid__freeze" aria-hidden="true"><i>❄</i><b>冻结</b></span>
+          <span className="kid__freeze" aria-hidden="true"><i>❄</i><b>{text("冻结", "FROZEN")}</b></span>
         </div>
       </div>
       <span className="kid__hp" aria-hidden="true">
@@ -604,6 +677,7 @@ function RosterCard({
   onMove: (direction: -1 | 1) => void;
   onLevelChange: (level: AiLevel) => void;
 }) {
+  const { language, text } = useLanguage();
   const palette = getPlayerPalette(player);
   return (
     <div className={`roster-card roster-card--${player.team}${player.isUser ? " is-you" : ""}`}>
@@ -626,27 +700,27 @@ function RosterCard({
       <span className="roster-card__identity">
         <strong>{player.name}</strong>
         <small>
-          {index === 0 ? "前排 · " : `第 ${index + 1} 位 · `}
-          {ROLE_LABELS[player.role]} · {player.maxHealth} HP
+          {index === 0 ? text("前排 · ", "Frontline · ") : text(`第 ${index + 1} 位 · `, `Position ${index + 1} · `)}
+          {player.maxHealth} HP
         </small>
       </span>
       <span className="roster-card__settings">
         {player.isUser ? (
-          <em>真人</em>
+          <em>{text("真人", "Human")}</em>
         ) : (
           <select
             value={player.aiLevel}
             onChange={(event) => onLevelChange(event.target.value as AiLevel)}
-            aria-label={`${player.name} AI 强度`}
+            aria-label={text(`${player.name} AI 强度`, `${player.name} AI difficulty`)}
           >
             {Object.entries(AI_LEVELS).map(([value, profile]) => (
-              <option key={value} value={value}>{profile.label}</option>
+              <option key={value} value={value}>{language === "zh" ? profile.label : profile.labelEn}</option>
             ))}
           </select>
         )}
         <span className="formation-buttons">
-          <button onClick={() => onMove(-1)} disabled={index === 0} aria-label={`${player.name} 前移`}>前</button>
-          <button onClick={() => onMove(1)} disabled={index === total - 1} aria-label={`${player.name} 后移`}>后</button>
+          <button onClick={() => onMove(-1)} disabled={index === 0} aria-label={text(`${player.name} 前移`, `Move ${player.name} forward`)}>{text("前", "Forward")}</button>
+          <button onClick={() => onMove(1)} disabled={index === total - 1} aria-label={text(`${player.name} 后移`, `Move ${player.name} back`)}>{text("后", "Back")}</button>
         </span>
       </span>
     </div>
@@ -664,11 +738,12 @@ function TeamHealthRows({
   frontlineId: string | null;
   now: number;
 }) {
+  const { text } = useLanguage();
   return (
     <div className={`member-health-list member-health-list--${team}`}>
       {players.map((player) => (
         <div key={player.id} className={`member-health${player.health <= 0 ? " is-out" : ""}${player.frozenUntil > now ? " is-frozen" : ""}`}>
-          <span>{player.id === frontlineId ? "盾 " : ""}{player.frozenUntil > now ? "❄ " : ""}{player.name}</span>
+          <span>{player.id === frontlineId ? text("前 ", "F ") : ""}{player.frozenUntil > now ? "❄ " : ""}{player.name}</span>
           <i><b style={{ width: `${(player.health / player.maxHealth) * 100}%` }} /></i>
           <strong>{player.health}</strong>
         </div>
@@ -678,9 +753,11 @@ function TeamHealthRows({
 }
 
 export default function SnowballGame() {
+  const { language, text } = useLanguage();
+  const languageRef = useRef(language);
   const [gameMode, setGameMode] = useState<GameMode>("local");
   const [stage, setStage] = useState<Stage>("lobby");
-  const [playerName, setPlayerName] = useState("小雪球");
+  const [playerName, setPlayerName] = useState(language === "zh" ? "小雪球" : "Snowball");
   const [onlinePlayerName, setOnlinePlayerName] = useState("");
   const [roomCodeInput, setRoomCodeInput] = useState("");
   const [wordbookId, setWordbookId] = useState<WordbookId>("winter");
@@ -702,7 +779,7 @@ export default function SnowballGame() {
   const [countdown, setCountdown] = useState(3);
   const [winner, setWinner] = useState<Team | null>(null);
   const [inputError, setInputError] = useState(false);
-  const [announcement, setAnnouncement] = useState("等待开战");
+  const [announcement, setAnnouncement] = useState(language === "zh" ? "等待开战" : "Waiting for battle");
   const room = useRoomSocket({ autoResume: true });
 
   const inputRef = useRef<HTMLInputElement>(null);
@@ -729,10 +806,28 @@ export default function SnowballGame() {
   const handledRoomEventRef = useRef<RoomEvent | null>(null);
   const onlinePhaseRef = useRef<RoomSnapshot["phase"] | null>(null);
   const eliminatedPlayerIdsRef = useRef(new Set<string>());
+  const fallingPlayerIdsRef = useRef(new Set<string>());
+  const fallenPlayerIdsRef = useRef(new Set<string>());
   const isOnline = gameMode === "online" || room.status !== "idle";
   const onlineSnapshot = isOnline ? room.snapshot : null;
   const onlineServerTimeOffsetMs = room.serverTimeOffsetMs;
   const getOnlineServerNow = room.getServerNow;
+
+  useEffect(() => {
+    languageRef.current = language;
+    // Language changes are explicit user actions; refresh transient copy immediately.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setPlayerName((current) => current === "小雪球" || current === "Snowball"
+      ? language === "zh" ? "小雪球" : "Snowball"
+      : current);
+    setAnnouncement(stageRef.current === "playing"
+      ? language === "zh" ? "继续抢单词雪花！" : "Keep claiming word snowflakes!"
+      : language === "zh" ? "等待开战" : "Waiting for battle");
+  }, [language]);
+
+  const textNow = useCallback((chinese: string, english: string) => (
+    languageRef.current === "zh" ? chinese : english
+  ), []);
 
   useEffect(() => {
     if (inviteHandledRef.current || typeof window === "undefined") return;
@@ -748,9 +843,9 @@ export default function SnowballGame() {
 
   const activePlayers = useMemo(
     () => isOnline
-      ? players.filter((player) => player.active)
-      : createLocalDisplayPlayers(players, playerName),
-    [isOnline, playerName, players],
+      ? localizeOnlinePlayers(players.filter((player) => player.active), language)
+      : createLocalDisplayPlayers(players, playerName, language),
+    [isOnline, language, playerName, players],
   );
   const pinePlayers = activePlayers
     .filter((player) => player.team === "pine")
@@ -787,6 +882,14 @@ export default function SnowballGame() {
     snowfallProfile.minimumWords,
     snowfallProfile.maximumWords,
   );
+  const localizedRoomError = room.error
+    ? language === "zh"
+      ? room.error.message
+      : ENGLISH_ROOM_ERRORS[room.error.code]
+        ?? (room.error.code.startsWith("CREATE_ROOM_")
+          ? "Could not create the room. Please try again."
+          : "The room encountered an error. Please try again.")
+    : null;
 
   const setGameStage = useCallback((nextStage: Stage) => {
     stageRef.current = nextStage;
@@ -811,11 +914,28 @@ export default function SnowballGame() {
       mapRoomWord(word, onlineSnapshot, onlineServerTimeOffsetMs));
     if (onlineSnapshot.phase === "lobby" || onlineSnapshot.phase === "countdown") {
       eliminatedPlayerIdsRef.current.clear();
+      fallingPlayerIdsRef.current.clear();
+      fallenPlayerIdsRef.current.clear();
     }
     for (const player of mappedPlayers) {
-      if (player.health <= 0) eliminatedPlayerIdsRef.current.add(player.id);
+      const previous = playersRef.current.find((candidate) => candidate.id === player.id);
+      if (player.health <= 0) {
+        eliminatedPlayerIdsRef.current.add(player.id);
+        if (previous && previous.health > 0) {
+          fallingPlayerIdsRef.current.add(player.id);
+          fallenPlayerIdsRef.current.delete(player.id);
+        } else if (
+          !fallingPlayerIdsRef.current.has(player.id)
+          && !fallenPlayerIdsRef.current.has(player.id)
+        ) {
+          fallenPlayerIdsRef.current.add(player.id);
+        }
+      } else {
+        eliminatedPlayerIdsRef.current.delete(player.id);
+        fallingPlayerIdsRef.current.delete(player.id);
+        fallenPlayerIdsRef.current.delete(player.id);
+      }
     }
-    const eliminatedIds = eliminatedPlayerIdsRef.current;
     const selfPlayer = onlineSnapshot.players.find(
       (player) => player.id === onlineSnapshot.selfPlayerId,
     );
@@ -830,11 +950,8 @@ export default function SnowballGame() {
     setPlayers(mappedPlayers);
     wordsRef.current = mappedWords;
     setWords(mappedWords);
-    setProjectiles((current) => current.filter(
-      (projectile) => !eliminatedIds.has(projectile.sourcePlayerId),
-    ));
     setCatchEffects((current) => current.filter(
-      (effect) => !eliminatedIds.has(effect.sourcePlayerId),
+      (effect) => !eliminatedPlayerIdsRef.current.has(effect.sourcePlayerId),
     ));
     setCharacterActions((current) => Object.fromEntries(
       mappedPlayers.map((player) => [player.id, current[player.id] ?? { phase: "idle", token: 0 }]),
@@ -867,7 +984,7 @@ export default function SnowballGame() {
     }
     if (onlinePhaseRef.current !== onlineSnapshot.phase) {
       onlinePhaseRef.current = onlineSnapshot.phase;
-      setAnnouncement(
+      setAnnouncement(textNow(
         onlineSnapshot.phase === "lobby"
           ? "等待所有真人准备"
           : onlineSnapshot.phase === "countdown"
@@ -875,7 +992,14 @@ export default function SnowballGame() {
             : onlineSnapshot.phase === "ended"
               ? "本局已经结束"
               : "服务器实时裁定中",
-      );
+        onlineSnapshot.phase === "lobby"
+          ? "Waiting for every human player to ready up"
+          : onlineSnapshot.phase === "countdown"
+            ? "Room locked. Get ready!"
+            : onlineSnapshot.phase === "ended"
+              ? "This match is over"
+              : "The server is refereeing live",
+      ));
     }
   }, [
     getOnlineServerNow,
@@ -884,6 +1008,7 @@ export default function SnowballGame() {
     onlineServerTimeOffsetMs,
     onlineSnapshot,
     setGameStage,
+    textNow,
   ]);
 
   useEffect(() => {
@@ -937,13 +1062,15 @@ export default function SnowballGame() {
   }, []);
 
   const say = useCallback(
-    (message: string) => {
-      setAnnouncement(message);
+    (chinese: string, english: string) => {
+      setAnnouncement(textNow(chinese, english));
       scheduleTimer(() => {
-        if (stageRef.current === "playing") setAnnouncement("继续抢单词雪花！");
+        if (stageRef.current === "playing") {
+          setAnnouncement(textNow("继续抢单词雪花！", "Keep claiming word snowflakes!"));
+        }
       }, 1600);
     },
-    [scheduleTimer],
+    [scheduleTimer, textNow],
   );
 
   const setCharacterPose = useCallback(
@@ -1085,9 +1212,12 @@ export default function SnowballGame() {
       setTyped("");
       clearTargetWord();
       setGameStage("ended");
-      setAnnouncement(winningTeam === "pine" ? "雪松队守住了河岸！" : "红莓队突破了防线！");
+      setAnnouncement(textNow(
+        winningTeam === "pine" ? "雪松队守住了河岸！" : "红莓队突破了防线！",
+        winningTeam === "pine" ? "Pine Team held the riverbank!" : "Berry Team broke through!",
+      ));
     },
-    [clearTargetWord, setGameStage],
+    [clearTargetWord, setGameStage, textNow],
   );
 
   const registerClaim = useCallback((playerId: string) => {
@@ -1100,7 +1230,6 @@ export default function SnowballGame() {
 
   const applyDamage = useCallback(
     (attackerId: string, targetId: string, requestedDamage: number, kind: SnowWordKind = "normal") => {
-      if (stageRef.current === "ended") return;
       const target = playersRef.current.find((player) => player.id === targetId);
       if (!target || !target.active || target.health <= 0) return;
       const actualDamage = Math.min(target.health, requestedDamage);
@@ -1139,9 +1268,8 @@ export default function SnowballGame() {
       }
       if (targetHealth <= 0) {
         eliminatedPlayerIdsRef.current.add(target.id);
-        setProjectiles((current) => current.filter(
-          (projectile) => projectile.sourcePlayerId !== target.id,
-        ));
+        fallingPlayerIdsRef.current.add(target.id);
+        fallenPlayerIdsRef.current.delete(target.id);
         setCatchEffects((current) => current.filter(
           (effect) => effect.sourcePlayerId !== target.id,
         ));
@@ -1151,11 +1279,16 @@ export default function SnowballGame() {
         setTyped("");
         clearTargetWord();
       }
-      say(`${target.name} 承受 ${actualDamage} 点伤害${targetHealth <= 0 ? "，出局！" : shouldFreeze ? "，被冻结 1 秒！" : ""}`);
+      say(
+        `${target.name} 承受 ${actualDamage} 点伤害${targetHealth <= 0 ? "，出局！" : shouldFreeze ? "，被冻结 1 秒！" : ""}`,
+        `${target.name} takes ${actualDamage} damage${targetHealth <= 0 ? " and is knocked out!" : shouldFreeze ? " and is frozen for 1 second!" : ""}`,
+      );
       const survivors = next.filter(
         (player) => player.active && player.team === target.team && player.health > 0,
       );
-      if (!survivors.length) endMatch(target.team === "pine" ? "berry" : "pine");
+      if (!survivors.length && stageRef.current !== "ended") {
+        endMatch(target.team === "pine" ? "berry" : "pine");
+      }
     },
     [clearTargetWord, endMatch, say],
   );
@@ -1165,13 +1298,30 @@ export default function SnowballGame() {
       player: Player,
       word: SnowWord,
       damage: number,
-      options?: { authoritative?: boolean; targetId?: string | null; startsInMs?: number },
+      options?: {
+        authoritative?: boolean;
+        targetId?: string | null;
+        targetIds?: string[];
+        startsInMs?: number;
+      },
     ) => {
       const now = Date.now();
       const requestedStart = now + Math.max(0, options?.startsInMs ?? 0);
       const startsAt = Math.max(requestedStart, actorAvailableAtRef.current[player.id] ?? now);
       const queueDelay = startsAt - now;
       actorAvailableAtRef.current[player.id] = startsAt + 1850;
+      const currentTargets = playersRef.current
+        .filter((candidate) => candidate.active && candidate.team !== player.team && candidate.health > 0)
+        .sort((left, right) => left.position - right.position);
+      const requestedTargetIds = options?.targetIds?.length
+        ? options.targetIds
+        : options?.targetId
+          ? [options.targetId]
+          : word.kind === "frost"
+            ? currentTargets.map((target) => target.id)
+            : currentTargets.slice(0, 1).map((target) => target.id);
+      const lockedTargetIds = [...new Set(requestedTargetIds)]
+        .slice(0, word.kind === "frost" ? undefined : 1);
       const canAnimate = (attacker: Player | undefined) =>
         Boolean(
           attacker
@@ -1183,7 +1333,6 @@ export default function SnowballGame() {
       const sourceFallback = getActorAnchor(player);
       const visibleWord = pointInArena(wordNodesRef.current.get(word.id)) ?? { x: word.x, y: word.y };
       const catchId = ++sequenceRef.current;
-      const projectileId = ++sequenceRef.current;
       let throwToken: number | undefined;
 
       scheduleTimer(() => {
@@ -1225,66 +1374,77 @@ export default function SnowballGame() {
       scheduleTimer(() => {
         const attacker = playersRef.current.find((candidate) => candidate.id === player.id);
         if (!attacker || !canAnimate(attacker)) return;
-        const targets = playersRef.current
-          .filter((candidate) => candidate.active && candidate.team !== player.team && candidate.health > 0)
-          .sort((a, b) => a.position - b.position);
-        const target = options?.targetId
-          ? playersRef.current.find((candidate) => candidate.id === options.targetId) ?? targets[0]
-          : targets[0];
-        if (!target) return;
+        const targets = lockedTargetIds
+          .map((targetId) => playersRef.current.find((candidate) => candidate.id === targetId))
+          .filter((target): target is Player => Boolean(target?.active && target.team !== player.team));
+        if (!targets.length) return;
         const freshSourceFallback = getActorAnchor(attacker);
-        const targetFallback = getActorAnchor(target);
         const sourceMitten = kidNodesRef.current
           .get(attacker.id)
           ?.querySelector<HTMLElement>(".kid__arm--front .kid__mitten") ?? undefined;
-        const targetHead = kidNodesRef.current
-          .get(target.id)
-          ?.querySelector<HTMLElement>(".kid__head") ?? undefined;
         const freshSource = pointInArena(sourceMitten) ?? {
           x: freshSourceFallback.x,
           y: freshSourceFallback.handY,
         };
-        const freshTarget = pointInArena(targetHead) ?? {
-          x: targetFallback.x,
-          y: targetFallback.hitY,
-        };
-        const projectile: Projectile = {
-          id: projectileId,
-          team: attacker.team,
-          text: word.text,
-          damage,
-          kind: word.kind,
-          sourcePlayerId: attacker.id,
-          targetPlayerId: target.id,
-          fromX: freshSource.x,
-          fromY: freshSource.y,
-          midX: (freshSource.x + freshTarget.x) / 2,
-          apexY: Math.max(8, Math.min(freshSource.y, freshTarget.y) - 28),
-          toX: freshTarget.x,
-          toY: freshTarget.y,
-        };
+        const projectiles = targets.map((target) => {
+          const targetFallback = getActorAnchor(target);
+          const targetHead = kidNodesRef.current
+            .get(target.id)
+            ?.querySelector<HTMLElement>(".kid__head") ?? undefined;
+          const freshTarget = pointInArena(targetHead) ?? {
+            x: targetFallback.x,
+            y: targetFallback.hitY,
+          };
+          return {
+            id: ++sequenceRef.current,
+            team: attacker.team,
+            text: word.text,
+            damage,
+            kind: word.kind,
+            sourcePlayerId: attacker.id,
+            targetPlayerId: target.id,
+            fromX: freshSource.x,
+            fromY: freshSource.y,
+            midX: (freshSource.x + freshTarget.x) / 2,
+            apexY: Math.max(8, Math.min(freshSource.y, freshTarget.y) - 28),
+            toX: freshTarget.x,
+            toY: freshTarget.y,
+          } satisfies Projectile;
+        });
+        const projectileIds = new Set(projectiles.map((projectile) => projectile.id));
         throwToken = setCharacterPose(attacker.id, "throw", word.text, word.kind);
-        setProjectiles((current) => [...current, projectile]);
+        setProjectiles((current) => [...current, ...projectiles]);
         scheduleTimer(() => {
-          setProjectiles((current) => current.filter((item) => item.id !== projectileId));
-          if (!options?.authoritative && stageRef.current === "ended") return;
-          const currentAttacker = playersRef.current.find((candidate) => candidate.id === attacker.id);
-          if (
-            !currentAttacker
-            || currentAttacker.health <= 0
-            || eliminatedPlayerIdsRef.current.has(attacker.id)
-          ) {
-            say(`${word.text} 随着 ${attacker.name} 出局而作废`);
-            return;
+          setProjectiles((current) => current.filter((item) => !projectileIds.has(item.id)));
+          let damagingHits = 0;
+          let fallingHits = 0;
+          for (const target of targets) {
+            const currentTarget = playersRef.current.find((candidate) => candidate.id === target.id);
+            if (!currentTarget) continue;
+            if (currentTarget.health > 0) {
+              damagingHits += 1;
+              const hitToken = setCharacterPose(target.id, "hit");
+              if (!options?.authoritative) applyDamage(attacker.id, target.id, damage, word.kind);
+              scheduleTimer(() => settleCharacterPose(target.id, "hit", hitToken), 620);
+              continue;
+            }
+            if (!fallenPlayerIdsRef.current.has(target.id)) {
+              fallingHits += 1;
+              fallingPlayerIdsRef.current.add(target.id);
+              const hitToken = setCharacterPose(target.id, "hit");
+              scheduleTimer(() => settleCharacterPose(target.id, "hit", hitToken), 620);
+            }
           }
-          const currentTarget = playersRef.current.find((candidate) => candidate.id === target.id);
-          if (!currentTarget || (!options?.authoritative && currentTarget.health <= 0)) {
-            say(`${word.text} 落在了空雪地上`);
-            return;
+          if (damagingHits === 0) {
+            say(
+              fallingHits > 0
+                ? `${word.text} 撞上了正在倒下的对手，没有额外伤害`
+                : `${word.text} 落在了空雪地上`,
+              fallingHits > 0
+                ? `${word.text} hits a falling opponent but deals no extra damage`
+                : `${word.text} lands harmlessly in the snow`,
+            );
           }
-          const hitToken = setCharacterPose(target.id, "hit");
-          if (!options?.authoritative) applyDamage(attacker.id, target.id, damage, word.kind);
-          scheduleTimer(() => settleCharacterPose(target.id, "hit", hitToken), 620);
         }, 610);
       }, queueDelay + 900);
       scheduleTimer(
@@ -1319,9 +1479,14 @@ export default function SnowballGame() {
         if (word.kind === "normal") {
           damage = clamp(damage + Math.min(2, Math.floor(nextCombo / 5)), 10, 15);
         }
-        say(word.kind === "frost"
-          ? `${word.text} — 抢到冰晶雪球！命中冻结 1 秒`
-          : `${word.text} — 你最快！连击 ×${nextCombo}`);
+        say(
+          word.kind === "frost"
+            ? `${word.text} — 抢到冰晶大雪花！群伤并冻结全体 1 秒`
+            : `${word.text} — 你最快！连击 ×${nextCombo}`,
+          word.kind === "frost"
+            ? `${word.text} — Giant frost snowflake claimed! Area damage and a 1-second team freeze`
+            : `${word.text} — You were fastest! Combo ×${nextCombo}`,
+        );
       } else {
         const currentTyped = typedRef.current;
         const targetWasStolen = targetWordIdRef.current === word.id;
@@ -1331,7 +1496,7 @@ export default function SnowballGame() {
           setTyped("");
           clearTargetWord();
         }
-        say(`${player.name} 抢走了 ${word.text}`);
+        say(`${player.name} 抢走了 ${word.text}`, `${player.name} claimed ${word.text}`);
       }
 
       registerClaim(player.id);
@@ -1351,45 +1516,68 @@ export default function SnowballGame() {
       const claimedWord = mapRoomWord(event.word, onlineSnapshot, onlineServerTimeOffsetMs);
       launchSnowball(attacker, claimedWord, event.damage, {
         authoritative: true,
+        targetId: event.targetId,
+        targetIds: event.targetIds,
         startsInMs: Math.max(0, event.startsAt - getOnlineServerNow()),
       });
       setAnnouncement(
-        attacker.isUser
+        textNow(attacker.isUser
           ? `${event.word.text} — 服务器确认你最快！`
           : `${attacker.name} 抢走了 ${event.word.text}`,
+        attacker.isUser
+          ? `${event.word.text} — The server confirms you were fastest!`
+          : `${attacker.name} claimed ${event.word.text}`),
       );
       return;
     }
     if (event.type === "typing.rejected" && event.playerId === onlineSnapshot.selfPlayerId) {
       setInputError(true);
-      if (event.reason === "FROZEN") setAnnouncement("❄ 你被冻结了，1 秒后继续输入");
+      if (event.reason === "FROZEN") {
+        setAnnouncement(textNow("❄ 你被冻结了，1 秒后继续输入", "❄ You are frozen. Resume typing in 1 second"));
+      }
       window.setTimeout(() => setInputError(false), 260);
       return;
     }
     if (event.type === "attack.resolved") {
+      for (const hit of event.hits) {
+        if (hit.targetHealth !== 0) continue;
+        const wasEliminated = eliminatedPlayerIdsRef.current.has(hit.targetId);
+        eliminatedPlayerIdsRef.current.add(hit.targetId);
+        if (!wasEliminated) {
+          fallingPlayerIdsRef.current.add(hit.targetId);
+          fallenPlayerIdsRef.current.delete(hit.targetId);
+        }
+        setCatchEffects((current) => current.filter(
+          (effect) => effect.sourcePlayerId !== hit.targetId,
+        ));
+      }
       const target = event.targetId
         ? playersRef.current.find((player) => player.id === event.targetId)
         : null;
-      if (target && event.targetHealth === 0) {
-        eliminatedPlayerIdsRef.current.add(target.id);
-        setProjectiles((current) => current.filter(
-          (projectile) => projectile.sourcePlayerId !== target.id,
-        ));
-        setCatchEffects((current) => current.filter(
-          (effect) => effect.sourcePlayerId !== target.id,
-        ));
-      }
-      setAnnouncement(
+      const frozenHits = event.hits.filter((hit) => hit.frozenUntil !== null);
+      setAnnouncement(textNow(
         event.missed || !target
-          ? "雪球落在了空雪地上"
-          : event.frozenUntil !== null
-            ? `${target.name} 承受 ${event.actualDamage} 点伤害，被冻结 1 秒！`
+          ? target && !fallenPlayerIdsRef.current.has(target.id)
+            ? `雪球撞上正在倒下的 ${target.name}，没有额外伤害`
+            : "雪球落在了空雪地上"
+          : event.kind === "frost" && frozenHits.length > 0
+            ? `冰晶雪球命中 ${event.hits.length} 人，冻结对方全体 1 秒！`
             : `${target.name} 承受 ${event.actualDamage} 点伤害`,
-      );
+        event.missed || !target
+          ? target && !fallenPlayerIdsRef.current.has(target.id)
+            ? `The snowball hits ${target.name} while they are falling, but deals no extra damage`
+            : "The snowball lands harmlessly in the snow"
+          : event.kind === "frost" && frozenHits.length > 0
+            ? `The frost snowflake hits ${event.hits.length} ${event.hits.length === 1 ? "player" : "players"} and freezes the whole enemy team for 1 second!`
+            : `${target.name} takes ${event.actualDamage} damage`,
+      ));
       return;
     }
-    if (event.type === "match.started") setAnnouncement("联机对战开始！");
-    if (event.type === "match.ended") setAnnouncement(`${event.winner === "pine" ? "雪松队" : "红莓队"}获胜！`);
+    if (event.type === "match.started") setAnnouncement(textNow("联机对战开始！", "Online battle started!"));
+    if (event.type === "match.ended") setAnnouncement(textNow(
+      `${event.winner === "pine" ? "雪松队" : "红莓队"}获胜！`,
+      `${event.winner === "pine" ? "Pine Team" : "Berry Team"} wins!`,
+    ));
   }, [
     getOnlineServerNow,
     isOnline,
@@ -1397,6 +1585,7 @@ export default function SnowballGame() {
     onlineServerTimeOffsetMs,
     onlineSnapshot,
     room.lastEvent,
+    textNow,
   ]);
 
   const spawnWord = useCallback(
@@ -1500,7 +1689,7 @@ export default function SnowballGame() {
   const startMatch = useCallback(() => {
     clearPendingTimers();
     const displayNames = new Map(
-      createLocalDisplayPlayers(players, playerName).map((player) => [player.id, player.name]),
+      createLocalDisplayPlayers(players, playerName, languageRef.current).map((player) => [player.id, player.name]),
     );
     const cleanPlayers = players.map((player) => ({
       ...player,
@@ -1517,6 +1706,8 @@ export default function SnowballGame() {
     setProjectiles([]);
     setCatchEffects([]);
     eliminatedPlayerIdsRef.current.clear();
+    fallingPlayerIdsRef.current.clear();
+    fallenPlayerIdsRef.current.clear();
     setCharacterActions(createIdleActions());
     actorAvailableAtRef.current = {};
     lockedWordsRef.current.clear();
@@ -1537,10 +1728,10 @@ export default function SnowballGame() {
     setTyped("");
     setInputError(false);
     setCountdown(3);
-    setAnnouncement("前排挡住，后排准备输出！");
+    setAnnouncement(textNow("前排挡住，后排准备输出！", "Frontline up; backline get ready to type!"));
     gameStartedAtRef.current = 0;
     setGameStage("countdown");
-  }, [clearPendingTimers, clearTargetWord, playerName, players, selectedWordbook.words, setGameStage, wordbookId]);
+  }, [clearPendingTimers, clearTargetWord, playerName, players, selectedWordbook.words, setGameStage, textNow, wordbookId]);
 
   const returnToLobby = useCallback(() => {
     clearPendingTimers();
@@ -1558,8 +1749,8 @@ export default function SnowballGame() {
     playersRef.current = healed;
     setPlayers(healed);
     setGameStage("lobby");
-    setAnnouncement("等待开战");
-  }, [clearPendingTimers, clearTargetWord, setGameStage]);
+    setAnnouncement(textNow("等待开战", "Waiting for battle"));
+  }, [clearPendingTimers, clearTargetWord, setGameStage, textNow]);
 
   useEffect(() => {
     stageRef.current = stage;
@@ -1595,14 +1786,14 @@ export default function SnowballGame() {
           );
         }
         gameStartedAtRef.current = Date.now();
-        setAnnouncement("开战！只输入英文单词");
+        setAnnouncement(textNow("开战！只输入英文单词", "Battle! Type English words only"));
         setGameStage("playing");
         return;
       }
       setCountdown((value) => value - 1);
     }, countdown <= 0 ? 0 : 720);
     return () => window.clearTimeout(timer);
-  }, [countdown, isOnline, maxWords, setGameStage, snowfallProfile.initialWords, spawnWord, stage]);
+  }, [countdown, isOnline, maxWords, setGameStage, snowfallProfile.initialWords, spawnWord, stage, textNow]);
 
   useEffect(() => {
     if (stage === "playing" && userAlive) window.setTimeout(() => inputRef.current?.focus(), 30);
@@ -1688,12 +1879,12 @@ export default function SnowballGame() {
         pausedAtRef.current = Date.now();
         pausePendingTimers();
         setGameStage("paused");
-        setAnnouncement("离开页面，已自动暂停");
+        setAnnouncement(textNow("离开页面，已自动暂停", "You left the page, so the local match was paused"));
       }
     };
     document.addEventListener("visibilitychange", handleVisibility);
     return () => document.removeEventListener("visibilitychange", handleVisibility);
-  }, [isOnline, pausePendingTimers, setGameStage]);
+  }, [isOnline, pausePendingTimers, setGameStage, textNow]);
 
   useEffect(
     () => () => {
@@ -1815,7 +2006,10 @@ export default function SnowballGame() {
     pausedAtRef.current = 0;
     setGameStage("playing");
     resumePendingTimers();
-    setAnnouncement(userAlive ? "继续抢英文单词！" : "你已出局，AI 队友继续作战");
+    setAnnouncement(textNow(
+      userAlive ? "继续抢英文单词！" : "你已出局，AI 队友继续作战",
+      userAlive ? "Keep claiming English words!" : "You are out; your AI teammates keep fighting",
+    ));
   };
 
   const switchToOnlineMode = () => {
@@ -1829,7 +2023,7 @@ export default function SnowballGame() {
     clearTargetWord();
     setGameStage("lobby");
     setGameMode("online");
-    setAnnouncement("创建房间或输入好友的房间码");
+    setAnnouncement(textNow("创建房间或输入好友的房间码", "Create a room or enter your friend's room code"));
   };
 
   const switchToLocalMode = () => {
@@ -1849,7 +2043,7 @@ export default function SnowballGame() {
     setWinner(null);
     setGameStage("lobby");
     setGameMode("local");
-    setAnnouncement("等待开战");
+    setAnnouncement(textNow("等待开战", "Waiting for battle"));
   };
 
   const leaveOnlineRoom = () => {
@@ -1868,6 +2062,7 @@ export default function SnowballGame() {
 
   return (
     <main className={`game-shell game-shell--${stage}`}>
+      <LanguageSwitcher />
       <div className="ambient-snow" aria-hidden="true">
         {AMBIENT_SNOW.map((flake) => (
           <i
@@ -1892,7 +2087,7 @@ export default function SnowballGame() {
             roomCode={roomCodeInput}
             setRoomCode={setRoomCodeInput}
             status={room.status}
-            error={room.error?.message ?? null}
+            error={localizedRoomError}
             snapshot={onlineSnapshot}
             onCreate={() => { void room.createRoom(onlinePlayerName); }}
             onJoin={() => { room.joinRoom(roomCodeInput, onlinePlayerName); }}
@@ -1903,98 +2098,113 @@ export default function SnowballGame() {
         ) : (
         <section className="lobby" aria-labelledby="game-title">
           <div className="lobby__story">
-            <div className="mode-switch" role="group" aria-label="游戏模式">
-              <button className="is-active">本机 AI</button>
-              <button onClick={switchToOnlineMode}>好友联机</button>
+            <div className="mode-switch" role="group" aria-label={text("游戏模式", "Game mode")}>
+              <button className="is-active">{text("本机 AI", "Local AI")}</button>
+              <button onClick={switchToOnlineMode}>{text("好友联机", "Online with Friends")}</button>
             </div>
             <p className="eyebrow"><span /> SNOWCRAFT-INSPIRED TACTICAL REMAKE</p>
-            <h1 id="game-title">排好阵型，<br /><em>开打雪仗！</em></h1>
+            <h1 id="game-title">{text("排好阵型，", "Set your formation,")}<br /><em>{text("开打雪仗！", "start the snow battle!")}</em></h1>
             <p className="lobby__lead">
-              全英文单词竞速。肉盾站前排替队友吃伤害，快手躲在后排持续抢词输出。
+              {text(
+                "全英文单词竞速。所有人都是 100 HP；调整前后站位，让前排挡伤，后排持续抢词输出。",
+                "Race to type English words. Everyone has 100 HP; let the frontline absorb hits while the backline keeps claiming snowballs.",
+              )}
             </p>
 
-            <div className="rule-strip" aria-label="游戏规则">
-              <span><b>01</b> 英文雪花永久停留</span>
-              <span><b>02</b> 永远攻击最前排</span>
-              <span><b>03</b> 全员出局才算输</span>
+            <div className="rule-strip" aria-label={text("游戏规则", "Game rules")}>
+              <span><b>01</b> {text("英文雪花直到被抢才消失", "Words remain until claimed")}</span>
+              <span><b>02</b> {text("新雪球锁定当前前排", "New snowballs lock the current frontline")}</span>
+              <span><b>03</b> {text("全员出局才算输", "Your team loses when everyone is out")}</span>
             </div>
 
             <div className="lobby__controls lobby__controls--formation">
               <label>
-                <span>你的名字</span>
-                <input value={playerName} maxLength={8} onChange={(event) => setPlayerName(event.target.value)} aria-label="你的名字" />
+                <span>{text("你的名字", "Your name")}</span>
+                <input value={playerName} maxLength={8} onChange={(event) => setPlayerName(event.target.value)} aria-label={text("你的名字", "Your name")} />
               </label>
               <label>
-                <span>雪松队人数</span>
-                <select value={pinePlayers.length} onChange={(event) => changeTeamSize("pine", Number(event.target.value))} aria-label="雪松队人数">
-                  {[1, 2, 3, 4].map((count) => <option key={count} value={count}>{count} 人</option>)}
+                <span>{text("雪松队人数", "Pine team size")}</span>
+                <select value={pinePlayers.length} onChange={(event) => changeTeamSize("pine", Number(event.target.value))} aria-label={text("雪松队人数", "Pine team size")}>
+                  {[1, 2, 3, 4].map((count) => <option key={count} value={count}>{text(`${count} 人`, `${count} ${count === 1 ? "player" : "players"}`)}</option>)}
                 </select>
               </label>
               <label>
-                <span>红莓队人数</span>
-                <select value={berryPlayers.length} onChange={(event) => changeTeamSize("berry", Number(event.target.value))} aria-label="红莓队人数">
-                  {[1, 2, 3, 4].map((count) => <option key={count} value={count}>{count} 人</option>)}
+                <span>{text("红莓队人数", "Berry team size")}</span>
+                <select value={berryPlayers.length} onChange={(event) => changeTeamSize("berry", Number(event.target.value))} aria-label={text("红莓队人数", "Berry team size")}>
+                  {[1, 2, 3, 4].map((count) => <option key={count} value={count}>{text(`${count} 人`, `${count} ${count === 1 ? "player" : "players"}`)}</option>)}
                 </select>
               </label>
               <label className="lobby-control--wordbook">
-                <span>单词册</span>
+                <span>{text("单词册", "Wordbook")}</span>
                 <select
                   value={wordbookId}
                   onChange={(event) => changeWordbook(event.target.value as WordbookId)}
-                  aria-label="选择单词册"
+                  aria-label={text("选择单词册", "Choose wordbook")}
                 >
                   {WORD_BOOK_OPTIONS.map((wordbook) => (
                     <option key={wordbook.id} value={wordbook.id}>
-                      {wordbook.label} · {wordbook.words.length} 词
+                      {language === "zh" ? wordbook.label : wordbook.labelEn} · {text(`${wordbook.words.length} 词`, `${wordbook.words.length} words`)}
                     </option>
                   ))}
                 </select>
               </label>
               <label className="lobby-control--density">
-                <span>雪花密度</span>
+                <span>{text("雪花密度", "Snowfall density")}</span>
                 <select
                   value={snowfallLevel}
                   onChange={(event) => setSnowfallLevel(event.target.value as SnowfallLevel)}
-                  aria-label="选择雪花密度"
+                  aria-label={text("选择雪花密度", "Choose snowfall density")}
                 >
                   {(["light", "classic", "blizzard"] as const).map((level) => (
-                    <option key={level} value={level}>{SNOWFALL_PROFILES[level].label}</option>
+                    <option key={level} value={level}>{language === "zh" ? SNOWFALL_PROFILES[level].label : SNOWFALL_PROFILES[level].labelEn}</option>
                   ))}
                 </select>
               </label>
             </div>
 
             <div className="wordbook-tip" aria-live="polite">
-              <strong>{selectedWordbook.shortLabel}</strong>
-              <span>{selectedWordbook.description}</span>
-              <small>{selectedWordbook.words.length} 个词 · {selectedWordbook.sourceNote}</small>
-              <small>{snowfallProfile.label}雪量 · 场上最多 {maxWords} 词 · 普通伤害 10 / 11 / 12 / 13 · 冰晶 15 + 冻结 1 秒</small>
+              <strong>{language === "zh" ? selectedWordbook.shortLabel : selectedWordbook.shortLabelEn}</strong>
+              <span>{language === "zh" ? selectedWordbook.description : selectedWordbook.descriptionEn}</span>
+              <small>{text(
+                `${selectedWordbook.words.length} 个词 · ${selectedWordbook.sourceNote}`,
+                `${selectedWordbook.words.length} words · ${selectedWordbook.sourceNoteEn}`,
+              )}</small>
+              <small>{text(
+                `${snowfallProfile.label}雪量 · 场上最多 ${maxWords} 词 · 普通伤害 10 / 11 / 12 / 13 · 冰晶群伤 15 + 全体冻结 1 秒`,
+                `${snowfallProfile.labelEn} snowfall · Up to ${maxWords} words · Normal damage 10 / 11 / 12 / 13 · Frost area damage 15 + 1-second team freeze`,
+              )}</small>
             </div>
 
             <div className="formation-tip">
-              <strong>职业与速度</strong>
-              <span>肉盾 / 均衡 / 快手只决定血量；AI 抢词速度由难度单独决定，真人只看实际打字速度。</span>
+              <strong>{text("站位与 AI 强度", "Formation and AI Difficulty")}</strong>
+              <span>{text(
+                "站位决定承伤顺序；全员 100 HP。AI 难度只影响抢词速度，真人只看实际打字速度。",
+                "Formation determines who takes damage first, and everyone has 100 HP. AI difficulty only changes typing speed; human speed is never throttled.",
+              )}</span>
             </div>
 
             <button className="primary-button" onClick={startMatch}>
-              <span>{pinePlayers.length} VS {berryPlayers.length} · {selectedWordbook.shortLabel} · {snowfallProfile.short}</span>
-              <strong>按阵型开战 →</strong>
+              <span>{pinePlayers.length} VS {berryPlayers.length} · {language === "zh" ? selectedWordbook.shortLabel : selectedWordbook.shortLabelEn} · {language === "zh" ? snowfallProfile.short : snowfallProfile.shortEn}</span>
+              <strong>{text("按阵型开战 →", "Start with This Formation →")}</strong>
             </button>
             <p className="local-note">
-              本机模式 · 1 位真人 + {pinePlayers.length + berryPlayers.length - 1} 位可调强度 AI · 洗牌抽词不连号重复
+              {text(
+                `本机模式 · 1 位真人 + ${pinePlayers.length + berryPlayers.length - 1} 位可调强度 AI · 洗牌抽词不连号重复`,
+                `Local mode · 1 human + ${pinePlayers.length + berryPlayers.length - 1} adjustable AI players · Shuffled word draws avoid immediate repeats`,
+              )}
             </p>
           </div>
 
           <div className="lobby__room">
             <div className="room-card room-card--formation">
               <div className="room-card__top">
-                <span><i /> 阵型编辑中</span>
+                <span><i /> {text("阵型编辑中", "Editing Formation")}</span>
                 <strong>{pinePlayers.length} VS {berryPlayers.length}</strong>
-                <small>不要求双方人数相等</small>
+                <small>{text("不要求双方人数相等", "Team sizes do not need to match")}</small>
               </div>
               <div className="room-vs">
                 <section>
-                  <header><TeamMark team="pine" /> 雪松队 <b>{pinePlayers.length}/4</b></header>
+                  <header><TeamMark team="pine" /> {text("雪松队", "Pine Team")} <b>{pinePlayers.length}/4</b></header>
                   {pinePlayers.map((player, index) => (
                     <RosterCard
                       key={player.id}
@@ -2008,7 +2218,7 @@ export default function SnowballGame() {
                 </section>
                 <div className="room-vs__river"><span>VS</span></div>
                 <section>
-                  <header><TeamMark team="berry" /> 红莓队 <b>{berryPlayers.length}/4</b></header>
+                  <header><TeamMark team="berry" /> {text("红莓队", "Berry Team")} <b>{berryPlayers.length}/4</b></header>
                   {berryPlayers.map((player, index) => (
                     <RosterCard
                       key={player.id}
@@ -2022,31 +2232,39 @@ export default function SnowballGame() {
                 </section>
               </div>
               <div className="room-card__footer">
-                <span>🛡 前排挡伤</span>
-                <span>⌨ {selectedWordbook.shortLabel} · {snowfallProfile.short}</span>
-                <span>⚙ 职业管血量，难度管 AI 速度</span>
+                <span>{text("🛡 前排挡伤", "🛡 Frontline absorbs hits")}</span>
+                <span>⌨ {language === "zh" ? selectedWordbook.shortLabel : selectedWordbook.shortLabelEn} · {language === "zh" ? snowfallProfile.short : snowfallProfile.shortEn}</span>
+                <span>{text("⚙ 全员 100 HP，AI 难度只管速度", "⚙ Everyone has 100 HP; AI difficulty only changes speed")}</span>
               </div>
             </div>
           </div>
         </section>
         )
       ) : (
-        <section className="match" aria-label="雪仗对战">
+        <section className="match" aria-label={text("雪仗对战", "Snow battle match")}>
           <header className="match-header">
-            <button className="brand-button" onClick={isOnline ? leaveOnlineRoom : returnToLobby} aria-label="返回阵型房间">
+            <button className="brand-button" onClick={isOnline ? leaveOnlineRoom : returnToLobby} aria-label={text("返回阵型房间", "Return to formation room")}>
               <span className="brand-button__flake">✦</span>
-              <span><strong>河岸雪仗</strong><small>SNOW TYPE BATTLE</small></span>
+              <span><strong>{text("河岸雪仗", "RIVERBANK SNOW BATTLE")}</strong><small>SNOW TYPE BATTLE</small></span>
             </button>
             <div className="match-header__status">
-              <span>{stage === "playing" ? "对战进行中" : stage === "countdown" ? "即将开战" : stage === "paused" ? "暂停中" : "本局结束"}</span>
+              <span>{stage === "playing"
+                ? text("对战进行中", "Battle in progress")
+                : stage === "countdown"
+                  ? text("即将开战", "Battle starting")
+                  : stage === "paused"
+                    ? text("暂停中", "Paused")
+                    : text("本局结束", "Match over")}</span>
               <b>{formatClock(elapsed)}</b>
               <small>
-                {pinePlayers.length}v{berryPlayers.length} · {selectedWordbook.shortLabel} · {snowfallProfile.short} · {isOnline ? `房间 ${onlineSnapshot?.code ?? "------"}` : "前排锁定"}
+                {pinePlayers.length}v{berryPlayers.length} · {language === "zh" ? selectedWordbook.shortLabel : selectedWordbook.shortLabelEn} · {language === "zh" ? snowfallProfile.short : snowfallProfile.shortEn} · {isOnline
+                  ? text(`房间 ${onlineSnapshot?.code ?? "------"}`, `Room ${onlineSnapshot?.code ?? "------"}`)
+                  : text("前排锁定", "Frontline lock")}
               </small>
             </div>
             {isOnline ? (
               <button className="paper-button" disabled>
-                {room.status === "connected" ? "● 联机中" : "↻ 重连中"}
+                {room.status === "connected" ? text("● 联机中", "● Online") : text("↻ 重连中", "↻ Reconnecting")}
               </button>
             ) : (
               <button
@@ -2061,7 +2279,7 @@ export default function SnowballGame() {
                 }}
                 disabled={stage === "countdown" || stage === "ended"}
               >
-                {stage === "paused" ? "继续" : "暂停"}
+                {stage === "paused" ? text("继续", "Resume") : text("暂停", "Pause")}
               </button>
             )}
           </header>
@@ -2069,16 +2287,16 @@ export default function SnowballGame() {
           <div className="scoreboard scoreboard--individual">
             <section className="team-score team-score--pine">
               <div className="team-score__label">
-                <span><TeamMark team="pine" /><b>雪松队</b><small>盾牌标记 = 当前前排</small></span>
-                <strong>{pineAlive}<i>/ {pinePlayers.length} 存活</i></strong>
+                <span><TeamMark team="pine" /><b>{text("雪松队", "Pine Team")}</b><small>{text("前排标记 = 当前承伤目标", "Front marker = current damage target")}</small></span>
+                <strong>{pineAlive}<i>/ {pinePlayers.length} {text("存活", "alive")}</i></strong>
               </div>
               <TeamHealthRows players={pinePlayers} team="pine" frontlineId={pineFrontlineId} now={effectNow} />
             </section>
-            <div className="scoreboard__badge"><span>前排</span><strong>VS</strong><small>锁定</small></div>
+            <div className="scoreboard__badge"><span>{text("前排", "FRONT")}</span><strong>VS</strong><small>{text("锁定", "LOCK")}</small></div>
             <section className="team-score team-score--berry">
               <div className="team-score__label">
-                <span><TeamMark team="berry" /><b>红莓队</b><small>倒下后自动切换下一位</small></span>
-                <strong>{berryAlive}<i>/ {berryPlayers.length} 存活</i></strong>
+                <span><TeamMark team="berry" /><b>{text("红莓队", "Berry Team")}</b><small>{text("只有新雪球会锁定下一位", "Only new snowballs lock the next player")}</small></span>
+                <strong>{berryAlive}<i>/ {berryPlayers.length} {text("存活", "alive")}</i></strong>
               </div>
               <TeamHealthRows players={berryPlayers} team="berry" frontlineId={berryFrontlineId} now={effectNow} />
             </section>
@@ -2106,6 +2324,10 @@ export default function SnowballGame() {
                   isFront={player.id === pineFrontlineId}
                   isFrozen={player.frozenUntil > effectNow}
                   finale={player.health <= 0 ? "defeat" : stage === "ended" ? (winner === "pine" ? "cheer" : "defeat") : undefined}
+                  onDefeatAnimationEnd={() => {
+                    fallingPlayerIdsRef.current.delete(player.id);
+                    fallenPlayerIdsRef.current.add(player.id);
+                  }}
                   nodeRef={(node) => {
                     if (node) kidNodesRef.current.set(player.id, node);
                     else kidNodesRef.current.delete(player.id);
@@ -2122,6 +2344,10 @@ export default function SnowballGame() {
                   isFront={player.id === berryFrontlineId}
                   isFrozen={player.frozenUntil > effectNow}
                   finale={player.health <= 0 ? "defeat" : stage === "ended" ? (winner === "berry" ? "cheer" : "defeat") : undefined}
+                  onDefeatAnimationEnd={() => {
+                    fallingPlayerIdsRef.current.delete(player.id);
+                    fallenPlayerIdsRef.current.add(player.id);
+                  }}
                   nodeRef={(node) => {
                     if (node) kidNodesRef.current.set(player.id, node);
                     else kidNodesRef.current.delete(player.id);
@@ -2130,7 +2356,7 @@ export default function SnowballGame() {
               ))}
             </div>
 
-            <div className="word-field" aria-label="不会自动消失的英文单词雪花">
+            <div className="word-field" aria-label={text("不会自动消失的英文单词雪花", "English word snowflakes that remain until claimed")}>
               {words.map((word) => {
                 const isLockedTarget = targetWordId === word.id;
                 const matchLength = typed && (targetWordId === null || isLockedTarget) && word.text.startsWith(typed)
@@ -2156,7 +2382,7 @@ export default function SnowballGame() {
                   : playerProgress > aiProgress
                     ? user?.id ?? null
                     : word.aiPlayerId;
-                const racer = players.find((player) => player.id === leaderId);
+                const racer = activePlayers.find((player) => player.id === leaderId);
                 const visibleProgress = isOnline
                   ? Math.max(networkProgress, aiProgress)
                   : Math.max(playerProgress, aiProgress);
@@ -2173,7 +2399,12 @@ export default function SnowballGame() {
                       else wordNodesRef.current.delete(word.id);
                     }}
                     className={`snow-word snow-word--${word.aiTeam} is-${raceState}${word.kind === "frost" ? " is-frost" : ""}${focusedWordId === word.id ? " is-focused" : ""}${word.y >= word.restY - 0.1 ? " is-resting" : ""}`}
-                    aria-label={word.kind === "frost" ? `冰晶特殊词 ${word.text}，15 点伤害，命中冻结 1 秒` : word.text}
+                    aria-label={word.kind === "frost"
+                      ? text(
+                        `冰晶特殊词 ${word.text}，对全体造成 15 点伤害并冻结 1 秒`,
+                        `Special frost word ${word.text}, 15 area damage and a 1-second team freeze`,
+                      )
+                      : word.text}
                     style={
                       {
                         left: `${word.x}%`,
@@ -2187,15 +2418,15 @@ export default function SnowballGame() {
                       <span className="snow-word__flake" aria-hidden="true">{word.kind === "frost" ? "✦" : "❄"}</span>
                       <strong><b>{word.text.slice(0, matchLength)}</b>{word.text.slice(matchLength)}</strong>
                       <i aria-hidden="true"><span style={{ width: `${visibleProgress * 100}%` }} /></i>
-                      {word.kind === "frost" && <small className="snow-word__power">ICE · 15 DMG · FREEZE 1s</small>}
+                      {word.kind === "frost" && <small className="snow-word__power">{text("冰晶 · 群伤 15 · 全体冻结 1秒", "ICE · 15 AOE DMG · TEAM FREEZE 1s")}</small>}
                       <small className="snow-word__state">
                         {isLockedTarget
-                          ? "TARGET LOCKED"
+                          ? text("目标已锁定", "TARGET LOCKED")
                           : raceState === "leading"
-                          ? "YOU'RE FASTEST"
+                          ? text("你最快", "YOU'RE FASTEST")
                           : raceState === "contested"
-                            ? `${racer?.name ?? "AI"} TYPING`
-                            : "OPEN"}
+                            ? text(`${racer?.name ?? "AI"} 正在输入`, `${racer?.name ?? "AI"} TYPING`)
+                            : text("无人争抢", "OPEN")}
                       </small>
                     </div>
                   </div>
@@ -2245,23 +2476,23 @@ export default function SnowballGame() {
 
             {(stage === "countdown" || stage === "paused" || stage === "ended") && (
               <div className="arena-overlay">
-                {stage === "countdown" && <><small>前排举盾</small><strong>{countdown || "GO!"}</strong><p>手放到英文键盘上</p></>}
-                {stage === "paused" && <><small>雪球先放下</small><strong>暂停</strong><p>AI 进度也已暂停</p><button onClick={resume}>继续对战</button></>}
+                {stage === "countdown" && <><small>{text("前排准备", "Frontline ready")}</small><strong>{countdown || "GO!"}</strong><p>{text("手放到英文键盘上", "Hands on your English keyboard")}</p></>}
+                {stage === "paused" && <><small>{text("雪球先放下", "Put the snowballs down")}</small><strong>{text("暂停", "PAUSED")}</strong><p>{text("AI 进度也已暂停", "AI progress is paused too")}</p><button onClick={resume}>{text("继续对战", "Resume Battle")}</button></>}
                 {stage === "ended" && (
                   <>
-                    <small>{winner === "pine" ? "雪松队守住河岸！" : "红莓队突破防线！"}</small>
-                    <strong>{user?.team === winner ? "胜利" : "再战"}</strong>
-                    <p>最佳连击 ×{bestCombo} · 准确率 {accuracy}%</p>
+                    <small>{winner === "pine" ? text("雪松队守住河岸！", "Pine Team held the riverbank!") : text("红莓队突破防线！", "Berry Team broke through!")}</small>
+                    <strong>{user?.team === winner ? text("胜利", "VICTORY") : text("再战", "TRY AGAIN")}</strong>
+                    <p>{text(`最佳连击 ×${bestCombo} · 准确率 ${accuracy}%`, `Best combo ×${bestCombo} · Accuracy ${accuracy}%`)}</p>
                     <div>
                       {isOnline ? (
                         onlineSnapshot?.selfPlayerId === onlineSnapshot?.hostPlayerId
-                          ? <button onClick={() => room.sendCommand({ op: "match.restart" })}>返回房间大厅</button>
-                          : <button disabled>等待房主重开</button>
+                          ? <button onClick={() => room.sendCommand({ op: "match.restart" })}>{text("返回房间大厅", "Return to Room Lobby")}</button>
+                          : <button disabled>{text("等待房主重开", "Waiting for Host")}</button>
                       ) : (
-                        <button onClick={startMatch}>同阵型再来</button>
+                        <button onClick={startMatch}>{text("同阵型再来", "Replay Same Formation")}</button>
                       )}
                       <button className="ghost" onClick={isOnline ? leaveOnlineRoom : returnToLobby}>
-                        {isOnline ? "离开房间" : "重排阵型"}
+                        {isOnline ? text("离开房间", "Leave Room") : text("重排阵型", "Rearrange Formation")}
                       </button>
                     </div>
                   </>
@@ -2270,30 +2501,33 @@ export default function SnowballGame() {
             )}
             {isOnline && stage === "playing" && !room.connected && (
               <div className="arena-overlay arena-overlay--network">
-                <small>席位仍为你保留</small>
-                <strong>重连中</strong>
-                <p>比赛会在服务器继续；连上后自动同步最新血量和雪花。</p>
+                <small>{text("席位仍为你保留", "Your seat is still reserved")}</small>
+                <strong>{text("重连中", "RECONNECTING")}</strong>
+                <p>{text("比赛会在服务器继续；连上后自动同步最新血量和雪花。", "The match continues on the server. Your health and words will synchronize after reconnecting.")}</p>
               </div>
             )}
           </div>
 
           <div className="type-dock">
             <div className="stat-card">
-              <small>连续命中</small>
+              <small>{text("连续命中", "COMBO")}</small>
               <strong>×{combo}</strong>
-              <span>最高 {bestCombo}</span>
+              <span>{text(`最高 ${bestCombo}`, `Best ${bestCombo}`)}</span>
             </div>
             <label className={`type-box${inputError ? " is-error" : ""}${typed ? " has-text" : ""}${userFrozen ? " is-frozen" : ""}`}>
               <span className="type-box__hint">
                 {userAlive
                   ? userFrozen
-                    ? `❄ 冰晶冻结中，${userFrozenSeconds} 秒后恢复`
+                    ? text(`❄ 冰晶冻结中，${userFrozenSeconds} 秒后恢复`, `❄ Frozen by ice; recover in ${userFrozenSeconds}s`)
                     : isOnline && !room.connected
-                    ? "网络中断，正在自动重连…"
+                    ? text("网络中断，正在自动重连…", "Connection lost; reconnecting automatically…")
                     : lockedTarget
-                    ? `已锁定 ${lockedTarget.text}；SPACE / ESC 可放弃`
-                    : `${selectedWordbook.shortLabel}；前缀唯一后自动锁定目标`
-                  : "你已出局，AI 队友仍会继续战斗"}
+                    ? text(`已锁定 ${lockedTarget.text}；SPACE / ESC 可放弃`, `${lockedTarget.text} locked; press SPACE / ESC to cancel`)
+                    : text(
+                      `${selectedWordbook.shortLabel}；前缀唯一后自动锁定目标`,
+                      `${selectedWordbook.shortLabelEn}; a unique prefix automatically locks the word`,
+                    )
+                  : text("你已出局，AI 队友仍会继续战斗", "You are out; your AI teammates keep fighting")}
               </span>
               <div className="type-box__line">
                 <span className="type-box__prompt">EN</span>
@@ -2303,33 +2537,45 @@ export default function SnowballGame() {
                   onChange={handleInput}
                   onKeyDown={handleInputKeyDown}
                   disabled={stage !== "playing" || !userAlive || userFrozen || (isOnline && !room.connected)}
-                  placeholder={userAlive ? (userFrozen ? "frozen…" : isOnline && !room.connected ? "reconnecting…" : "type an English word…") : "you are out"}
+                  placeholder={userAlive
+                    ? userFrozen
+                      ? text("冻结中…", "frozen…")
+                      : isOnline && !room.connected
+                        ? text("重连中…", "reconnecting…")
+                        : text("输入英文单词…", "type an English word…")
+                    : text("你已出局", "you are out")}
                   lang="en"
                   inputMode="text"
                   autoCapitalize="none"
                   autoComplete="off"
                   autoCorrect="off"
                   spellCheck={false}
-                  aria-label="英文单词输入框"
+                  aria-label={text("英文单词输入框", "English word input")}
                   onPaste={(event) => event.preventDefault()}
                 />
-                <span className="type-box__clear">SPACE 清空</span>
+                <span className="type-box__clear">{text("SPACE 清空", "SPACE clears")}</span>
               </div>
               <span className="type-box__message" aria-live="polite">
-                {inputError ? "没有这个英文开头，再看一眼" : announcement}
+                {inputError ? text("没有这个英文开头，再看一眼", "No word starts with that prefix. Look again") : announcement}
               </span>
             </label>
             <div className="stat-card stat-card--right">
-              <small>输入准确率</small>
+              <small>{text("输入准确率", "ACCURACY")}</small>
               <strong>{accuracy}%</strong>
-              <span>{players.find((player) => player.isUser)?.claims ?? 0} 个雪球</span>
+              <span>{text(
+                `${players.find((player) => player.isUser)?.claims ?? 0} 个雪球`,
+                `${players.find((player) => player.isUser)?.claims ?? 0} snowballs`,
+              )}</span>
             </div>
           </div>
         </section>
       )}
 
       <div className="sr-only" aria-live="assertive">
-        雪松队还有 {pineAlive} 人，红莓队还有 {berryAlive} 人。
+        {text(
+          `雪松队还有 ${pineAlive} 人，红莓队还有 ${berryAlive} 人。`,
+          `Pine Team has ${pineAlive} ${pineAlive === 1 ? "player" : "players"} left; Berry Team has ${berryAlive} ${berryAlive === 1 ? "player" : "players"}.`,
+        )}
       </div>
     </main>
   );
