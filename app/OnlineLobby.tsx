@@ -355,8 +355,8 @@ export function OnlineLobby(props: OnlineLobbyProps) {
               <li><b>2</b><span>{text("好友输入 6 位码加入，两队可不对称", "Friends join with the 6-character code; teams may be uneven")}</span></li>
               <li><b>3</b><span>{text("大家打同一批词，最快者抢到雪球", "Everyone types the same words; the fastest player claims each snowball")}</span></li>
               <li><b>✦</b><span>{text(
-                "当前词册最长的 10 个单词会无放回轮换为冰晶大雪花：群伤 15 并冻结对方全体 1 秒",
-                "The 10 longest words in the selected book rotate without repeats as giant frost snowflakes: 15 area damage and a 1-second freeze for the whole enemy team",
+                "当前词册最长的 10 个单词会无放回轮换为超级雪花：命中对方全体 15 点并冻住 1 秒",
+                "The 10 longest words in the selected book rotate without repeats as Super Snowflakes: hit every opponent for 15 and freeze them for 1 second",
               )}</span></li>
             </ol>
             <small>{text(

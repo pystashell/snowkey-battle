@@ -1531,10 +1531,10 @@ export default function SnowballGame() {
         }
         say(
           word.kind === "frost"
-            ? `${word.text} — 抢到冰晶大雪花！群伤并冻结全体 1 秒`
+            ? `${word.text} — 抢到超级雪花！命中对方全体并冻住 1 秒`
             : `${word.text} — 你最快！连击 ×${nextCombo}`,
           word.kind === "frost"
-            ? `${word.text} — Giant frost snowflake claimed! Area damage and a 1-second team freeze`
+            ? `${word.text} — Super Snowflake claimed! It hits the whole enemy team and freezes them for 1 second`
             : `${word.text} — You were fastest! Combo ×${nextCombo}`,
         );
       } else {
@@ -1611,14 +1611,14 @@ export default function SnowballGame() {
             ? `雪球撞上正在倒下的 ${target.name}，没有额外伤害`
             : "雪球落在了空雪地上"
           : event.kind === "frost" && frozenHits.length > 0
-            ? `冰晶雪球命中 ${event.hits.length} 人，冻结对方全体 1 秒！`
+            ? `超级雪花命中 ${event.hits.length} 人，冻住对方全体 1 秒！`
             : `${target.name} 承受 ${event.actualDamage} 点伤害`,
         event.missed || !target
           ? target && !fallenPlayerIdsRef.current.has(target.id)
             ? `The snowball hits ${target.name} while they are falling, but deals no extra damage`
             : "The snowball lands harmlessly in the snow"
           : event.kind === "frost" && frozenHits.length > 0
-            ? `The frost snowflake hits ${event.hits.length} ${event.hits.length === 1 ? "player" : "players"} and freezes the whole enemy team for 1 second!`
+            ? `The Super Snowflake hits ${event.hits.length} ${event.hits.length === 1 ? "player" : "players"} and freezes the whole enemy team for 1 second!`
             : `${target.name} takes ${event.actualDamage} damage`,
       ));
       return;
@@ -2247,8 +2247,8 @@ export default function SnowballGame() {
                 `${selectedWordbook.words.length} words · ${selectedWordbook.sourceNoteEn}`,
               )}</small>
               <small>{text(
-                `${snowfallProfile.label}雪量 · 场上最多 ${maxWords} 词 · 普通伤害 10 / 11 / 12 / 13 · 最长 10 词轮换冰晶 · 群伤 15 + 全体冻结 1 秒`,
-                `${snowfallProfile.labelEn} snowfall · Up to ${maxWords} words · Normal damage 10 / 11 / 12 / 13 · The 10 longest words rotate as frost words · 15 area damage + 1-second team freeze`,
+                `${snowfallProfile.label}雪量 · 场上最多 ${maxWords} 词 · 普通伤害 10 / 11 / 12 / 13 · 最长 10 词轮换超级雪花 · 全体命中 15 + 冻住 1 秒`,
+                `${snowfallProfile.labelEn} snowfall · Up to ${maxWords} words · Normal damage 10 / 11 / 12 / 13 · The 10 longest words rotate as Super Snowflakes · Hit all opponents for 15 + freeze for 1 second`,
               )}</small>
             </div>
 
@@ -2481,8 +2481,8 @@ export default function SnowballGame() {
                     className={`snow-word snow-word--${word.aiTeam} is-${raceState}${word.kind === "frost" ? " is-frost" : ""}${focusedWordId === word.id ? " is-focused" : ""}${isResting ? " is-resting" : ""}${isMelting ? " is-melting" : ""}`}
                     aria-label={word.kind === "frost"
                       ? text(
-                        `冰晶特殊词 ${word.text}，对全体造成 15 点伤害并冻结 1 秒`,
-                        `Special frost word ${word.text}, 15 area damage and a 1-second team freeze`,
+                        `超级雪花单词 ${word.text}，命中对方全体 15 点并冻住 1 秒`,
+                        `Super Snowflake word ${word.text}, hits every opponent for 15 and freezes them for 1 second`,
                       )
                       : word.text}
                     style={
@@ -2498,7 +2498,7 @@ export default function SnowballGame() {
                       <span className="snow-word__flake" aria-hidden="true">{word.kind === "frost" ? "✦" : "❄"}</span>
                       <strong><b>{word.text.slice(0, matchLength)}</b>{word.text.slice(matchLength)}</strong>
                       <i aria-hidden="true"><span style={{ width: `${visibleProgress * 100}%` }} /></i>
-                      {word.kind === "frost" && <small className="snow-word__power">{text("冰晶 · 群伤 15 · 全体冻结 1秒", "ICE · 15 AOE DMG · TEAM FREEZE 1s")}</small>}
+                      {word.kind === "frost" && <small className="snow-word__power">{text("超级雪花 · 全体 15 · 冻住 1秒", "SUPER SNOWFLAKE · ALL 15 · FREEZE 1s")}</small>}
                       <small className="snow-word__state">
                         {isMelting
                           ? text("正在融化", "MELTING")
@@ -2600,7 +2600,7 @@ export default function SnowballGame() {
               <span className="type-box__hint">
                 {userAlive
                   ? userFrozen
-                    ? text(`❄ 冰晶冻结中，${userFrozenSeconds} 秒后恢复`, `❄ Frozen by ice; recover in ${userFrozenSeconds}s`)
+                    ? text(`❄ 被超级雪花冻住，${userFrozenSeconds} 秒后恢复`, `❄ Frozen by a Super Snowflake; recover in ${userFrozenSeconds}s`)
                     : isOnline && !room.connected
                     ? text("网络中断，正在自动重连…", "Connection lost; reconnecting automatically…")
                     : lockedTarget
