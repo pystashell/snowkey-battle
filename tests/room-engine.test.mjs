@@ -14,12 +14,12 @@ const HOST_TOKEN = "host-token";
 
 const TEST_BOOK = ["snow", "star", "river", "planet", "cocoa", "winter", "forest", "glove"];
 
-function createEngine({ random = () => 0.5, words = TEST_BOOK } = {}) {
+function createEngine({ random = () => 0.5, words = TEST_BOOK, name = "房主" } = {}) {
   return RoomEngine.create({
     code: CODE,
     sessionId: HOST_SESSION,
     reconnectToken: HOST_TOKEN,
-    name: "房主",
+    name,
     now: 0,
     random,
     wordbooks: { winter: words },
@@ -81,6 +81,59 @@ test("creates a six-character room with eight stable seats and admits at most ei
   assert.equal(ninth.ok, false);
   assert.equal(ninth.code, "ROOM_FULL");
   assert.equal(engine.snapshot(11).humanCount, 8);
+});
+
+test("custom human names are unique while colliding AI names receive a distinct suffix", () => {
+  const engine = createEngine({ name: "阿澄" });
+  let snapshot = engine.snapshot(0, HOST_SESSION);
+  assert.equal(snapshot.players.find((player) => player.id === "pine-0")?.name, "阿澄");
+  assert.equal(snapshot.players.find((player) => player.id === "pine-1")?.name, "阿澄AI");
+  assert.equal(new Set(snapshot.players.map((player) => player.name.toLowerCase())).size, snapshot.players.length);
+
+  const duplicate = engine.join({
+    sessionId: "duplicate-name",
+    reconnectToken: "duplicate-name-token",
+    name: "阿澄",
+    now: 1,
+  });
+  assert.equal(duplicate.ok, false);
+  assert.equal(duplicate.code, "NAME_TAKEN");
+
+  const custom = engine.join({
+    sessionId: "custom-name",
+    reconnectToken: "custom-name-token",
+    name: "雪梨",
+    now: 2,
+  });
+  assert.equal(custom.ok, true);
+  snapshot = engine.snapshot(2, "custom-name");
+  assert.equal(snapshot.players.find((player) => player.id === custom.playerId)?.name, "雪梨");
+});
+
+test("a guest can move their own seat but cannot reorder another player", () => {
+  const engine = createEngine();
+  const guest = join(engine, 1, 10);
+  assert.equal(guest.ok, true);
+
+  const ownMove = engine.handleCommand(
+    "guest-1",
+    { op: "lobby.move", playerId: guest.playerId, direction: 1 },
+    11,
+  );
+  assert.equal(ownMove.ok, true);
+  assert.equal(engine.snapshot(11).players.find((player) => player.id === guest.playerId)?.position, 1);
+
+  const otherPlayer = engine.snapshot(11).players.find((player) => player.team === "berry" && player.position === 0);
+  assert.ok(otherPlayer);
+  const before = engine.snapshot(11).players.map((player) => [player.id, player.position]);
+  const forbidden = engine.handleCommand(
+    "guest-1",
+    { op: "lobby.move", playerId: otherPlayer.id, direction: 1 },
+    12,
+  );
+  assert.equal(forbidden.ok, false);
+  assert.equal(forbidden.code, "SELF_ONLY");
+  assert.deepEqual(engine.snapshot(12).players.map((player) => [player.id, player.position]), before);
 });
 
 test("host can configure an asymmetric 1v4 room but cannot shrink over a human", () => {
@@ -157,7 +210,22 @@ test("a disconnected human is replaced by AI exactly at 60 seconds", () => {
   const due = engine.advance(20 + ROOM_ENGINE_CONSTANTS.disconnectGraceMs);
   assert.equal(due.events.length, 1);
   assert.deepEqual(due.events[0], { type: "player.replaced_by_ai", playerId: joined.playerId });
-  assert.equal(engine.snapshot(60_020).players.find((player) => player.id === joined.playerId)?.controller.kind, "ai");
+  const replacement = engine.snapshot(60_020).players.find((player) => player.id === joined.playerId);
+  assert.equal(replacement?.controller.kind, "ai");
+  assert.equal(replacement?.name, "团子");
+  assert.equal(replacement?.badge, "团");
+});
+
+test("switching teams keeps the human name and gives the vacated AI a unique name", () => {
+  const engine = createEngine({ name: "小雪球" });
+  const switched = engine.handleCommand(HOST_SESSION, { op: "lobby.set_team", team: "berry" }, 5);
+  assert.equal(switched.ok, true);
+  const snapshot = engine.snapshot(5, HOST_SESSION);
+  const self = snapshot.players.find((player) => player.id === snapshot.selfPlayerId);
+  assert.equal(self?.name, "小雪球");
+  const names = snapshot.players.map((player) => player.name.toLowerCase());
+  assert.equal(new Set(names).size, names.length);
+  assert.equal(snapshot.players.find((player) => player.id === "pine-0")?.name, "小雪球AI");
 });
 
 test("prefix matching stays ambiguous, locks at one candidate, and rejects a bad key without changing the buffer", () => {

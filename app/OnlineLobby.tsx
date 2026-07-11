@@ -129,6 +129,7 @@ export function OnlineLobby(props: OnlineLobbyProps) {
   const isHost = Boolean(snapshot && snapshot.selfPlayerId === snapshot.hostPlayerId);
   const connected = status === "connected";
   const busy = status === "creating" || status === "connecting" || status === "reconnecting";
+  const hasPlayerName = playerName.trim().length > 0;
   const allHumansReady = snapshot?.players
     .filter((player) => player.controller.kind === "human")
     .every((player) => player.controller.kind === "human" && player.controller.connected && player.controller.ready) ?? false;
@@ -167,15 +168,17 @@ export function OnlineLobby(props: OnlineLobbyProps) {
           <>
             <div className="online-entry">
               <label>
-                <span>你的名字</span>
+                <span>你的联机昵称（每人单独填写）</span>
                 <input
                   value={playerName}
-                  maxLength={10}
+                  maxLength={8}
+                  placeholder="请输入你的名字"
+                  required
                   onChange={(event) => setPlayerName(event.target.value)}
                   aria-label="联机玩家名字"
                 />
               </label>
-              <button className="online-create" disabled={busy} onClick={onCreate}>
+              <button className="online-create" disabled={busy || !hasPlayerName} onClick={onCreate}>
                 创建新房间
               </button>
               <div className="online-entry__divider"><span>或者加入好友</span></div>
@@ -193,12 +196,12 @@ export function OnlineLobby(props: OnlineLobbyProps) {
                   aria-label="输入房间码"
                 />
               </label>
-              <button disabled={roomCode.length !== 6 || busy} onClick={onJoin}>
+              <button disabled={roomCode.length !== 6 || busy || !hasPlayerName} onClick={onJoin}>
                 加入房间
               </button>
             </div>
             <p className="online-connection-note">
-              {status === "connecting" ? "正在连接房间服务器…" : error ?? "好友不需要 VPN，只要能打开最终部署地址即可。"}
+              {status === "connecting" ? "正在连接房间服务器…" : error ?? "每位真人先填写自己的昵称；好友不需要 VPN，只要能打开最终部署地址即可。"}
             </p>
           </>
         ) : (

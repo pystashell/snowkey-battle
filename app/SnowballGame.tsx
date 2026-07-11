@@ -357,6 +357,34 @@ function createInitialPlayers(pineCount = 3, berryCount = 3): Player[] {
   });
 }
 
+function nameKey(value: string) {
+  return value.trim().toLowerCase();
+}
+
+function createUniqueLocalAiName(baseName: string, usedNames: Set<string>) {
+  if (!usedNames.has(nameKey(baseName))) return baseName;
+  for (let index = 1; index <= PLAYER_SEEDS.length; index += 1) {
+    const suffix = index === 1 ? "AI" : `AI${index}`;
+    const stem = Array.from(baseName).slice(0, Math.max(0, 8 - Array.from(suffix).length)).join("");
+    const candidate = `${stem}${suffix}`;
+    if (!usedNames.has(nameKey(candidate))) return candidate;
+  }
+  return baseName;
+}
+
+function createLocalDisplayPlayers(players: Player[], playerName: string) {
+  const active = players.filter((player) => player.active);
+  const userName = playerName.trim() || "小雪球";
+  const usedNames = new Set(active.filter((player) => player.isUser).map(() => nameKey(userName)));
+  return active.map((player) => {
+    if (player.isUser) return { ...player, name: userName };
+    const baseName = PLAYER_SEEDS.find((seed) => seed.id === player.id)?.name ?? player.name;
+    const uniqueName = createUniqueLocalAiName(baseName, usedNames);
+    usedNames.add(nameKey(uniqueName));
+    return uniqueName === player.name ? player : { ...player, name: uniqueName };
+  });
+}
+
 function createIdleActions(playerIds = PLAYER_SEEDS.map((player) => player.id)): Record<string, CharacterAction> {
   return Object.fromEntries(
     playerIds.map((playerId) => [playerId, { phase: "idle", token: 0 }]),
@@ -624,6 +652,7 @@ export default function SnowballGame() {
   const [gameMode, setGameMode] = useState<GameMode>("local");
   const [stage, setStage] = useState<Stage>("lobby");
   const [playerName, setPlayerName] = useState("小雪球");
+  const [onlinePlayerName, setOnlinePlayerName] = useState("");
   const [roomCodeInput, setRoomCodeInput] = useState("");
   const [wordbookId, setWordbookId] = useState<WordbookId>("winter");
   const [snowfallLevel, setSnowfallLevel] = useState<SnowfallLevel>("classic");
@@ -688,13 +717,10 @@ export default function SnowballGame() {
   }, []);
 
   const activePlayers = useMemo(
-    () =>
-      players
-        .filter((player) => player.active)
-        .map((player) =>
-          player.isUser ? { ...player, name: playerName.trim() || "小雪球" } : player,
-        ),
-    [playerName, players],
+    () => isOnline
+      ? players.filter((player) => player.active)
+      : createLocalDisplayPlayers(players, playerName),
+    [isOnline, playerName, players],
   );
   const pinePlayers = activePlayers
     .filter((player) => player.team === "pine")
@@ -1381,9 +1407,12 @@ export default function SnowballGame() {
 
   const startMatch = useCallback(() => {
     clearPendingTimers();
+    const displayNames = new Map(
+      createLocalDisplayPlayers(players, playerName).map((player) => [player.id, player.name]),
+    );
     const cleanPlayers = players.map((player) => ({
       ...player,
-      name: player.isUser ? playerName.trim() || "小雪球" : player.name,
+      name: displayNames.get(player.id) ?? player.name,
       health: player.maxHealth,
       claims: 0,
       damage: 0,
@@ -1739,15 +1768,15 @@ export default function SnowballGame() {
       {stage === "lobby" ? (
         isOnline ? (
           <OnlineLobby
-            playerName={playerName}
-            setPlayerName={setPlayerName}
+            playerName={onlinePlayerName}
+            setPlayerName={setOnlinePlayerName}
             roomCode={roomCodeInput}
             setRoomCode={setRoomCodeInput}
             status={room.status}
             error={room.error?.message ?? null}
             snapshot={onlineSnapshot}
-            onCreate={() => { void room.createRoom(playerName); }}
-            onJoin={() => { room.joinRoom(roomCodeInput, playerName); }}
+            onCreate={() => { void room.createRoom(onlinePlayerName); }}
+            onJoin={() => { room.joinRoom(roomCodeInput, onlinePlayerName); }}
             onLeave={leaveOnlineRoom}
             onLocalMode={switchToLocalMode}
             sendCommand={(command) => { room.sendCommand(command); }}

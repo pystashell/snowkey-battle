@@ -15,7 +15,7 @@ const ROOM_IDLE_TTL_MS = 6 * 60 * 60 * 1000;
 const JOIN_TIMEOUT_MS = 10 * 1000;
 const MAX_SOCKET_CONNECTIONS = 16;
 const MAX_CLIENT_MESSAGE_BYTES = 4 * 1024;
-const MAX_NAME_LENGTH = 18;
+const MAX_NAME_LENGTH = 8;
 const ROOM_ENGINE_OPTIONS = {
   wordbooks: {
     winter: WORD_BOOKS.winter.words,

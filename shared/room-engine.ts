@@ -24,6 +24,7 @@ const ATTACK_THROW_DELAY_MS = 900;
 const ATTACK_RESOLVE_DELAY_MS = 1_510;
 const ACTOR_QUEUE_INTERVAL_MS = 1_850;
 const COMBO_WINDOW_MS = 4_200;
+const MAX_PLAYER_NAME_LENGTH = 8;
 
 type RandomSource = () => number;
 
@@ -183,8 +184,27 @@ function normalizeRandom(value: number) {
 }
 
 function sanitizeName(value: string) {
-  const cleaned = Array.from(String(value ?? "").replace(/[\u0000-\u001f\u007f]/g, "").trim()).slice(0, 8).join("");
+  const cleaned = Array.from(String(value ?? "").replace(/[\u0000-\u001f\u007f]/g, "").trim())
+    .slice(0, MAX_PLAYER_NAME_LENGTH)
+    .join("");
   return cleaned || "雪球手";
+}
+
+function nameKey(value: string) {
+  return value.trim().toLowerCase();
+}
+
+function createUniqueAiName(baseName: string, usedNames: Set<string>) {
+  if (!usedNames.has(nameKey(baseName))) return baseName;
+  for (let index = 1; index <= MAX_TEAM_SIZE * 2; index += 1) {
+    const suffix = index === 1 ? "AI" : `AI${index}`;
+    const stemLength = Math.max(0, MAX_PLAYER_NAME_LENGTH - Array.from(suffix).length);
+    const stem = Array.from(baseName).slice(0, stemLength).join("");
+    const candidate = `${stem}${suffix}`;
+    if (!usedNames.has(nameKey(candidate))) return candidate;
+  }
+  return `AI${Math.abs(Array.from(baseName).reduce((total, character) => total + (character.codePointAt(0) ?? 0), 0))}`
+    .slice(0, MAX_PLAYER_NAME_LENGTH);
 }
 
 function sanitizeWords(words: readonly string[]) {
@@ -279,6 +299,7 @@ export class RoomEngine {
       conceptProgress: progress.length ? progress : DEFAULT_WORDBOOKS.conceptProgress,
       mixed: mixed.length ? mixed : DEFAULT_WORDBOOKS.winter,
     };
+    this.reconcileAiNames();
   }
 
   static create(input: CreateRoomEngineInput) {
@@ -375,10 +396,15 @@ export class RoomEngine {
       if (existing.controller.kind !== "human") {
         return this.failure("SESSION_EXPIRED", "This player is already controlled by AI.", events);
       }
+      const nextName = sanitizeName(input.name || existing.name);
+      if (this.isHumanNameTaken(nextName, existing.id)) {
+        return this.failure("NAME_TAKEN", "这个名字已经被其他玩家使用，请换一个。", events);
+      }
       existing.controller.connected = true;
       existing.disconnectDeadline = null;
-      existing.name = sanitizeName(input.name || existing.name);
+      existing.name = nextName;
       existing.badge = Array.from(existing.name)[0] ?? existing.badge;
+      this.reconcileAiNames();
       this.touch();
       return {
         ok: true,
@@ -398,8 +424,12 @@ export class RoomEngine {
     }
     const seat = this.selectJoinSeat();
     if (!seat) return this.failure("ROOM_FULL", "No seat is available.", events);
+    const playerName = sanitizeName(input.name);
+    if (this.isHumanNameTaken(playerName)) {
+      return this.failure("NAME_TAKEN", "这个名字已经被其他玩家使用，请换一个。", events);
+    }
     if (!seat.active) this.activateSeat(seat);
-    seat.name = sanitizeName(input.name);
+    seat.name = playerName;
     seat.badge = Array.from(seat.name)[0] ?? "友";
     seat.controller = { kind: "human", connected: true, ready: false, isHost: false };
     seat.sessionId = input.sessionId;
@@ -413,6 +443,7 @@ export class RoomEngine {
     seat.bestCombo = 0;
     seat.lastClaimAt = 0;
     this.state.typingByPlayer[seat.id] = { buffer: "", targetWordId: null };
+    this.reconcileAiNames();
     this.touch();
     return {
       ok: true,
@@ -588,6 +619,27 @@ export class RoomEngine {
     return this.state.players.find((player) => player.active && player.sessionId === sessionId) ?? null;
   }
 
+  private isHumanNameTaken(name: string, exceptPlayerId: string | null = null) {
+    const key = nameKey(name);
+    return this.humanPlayers().some((player) => player.id !== exceptPlayerId && nameKey(player.name) === key);
+  }
+
+  private reconcileAiNames() {
+    const usedNames = new Set(
+      this.state.players
+        .filter((player) => player.active && player.controller.kind === "human")
+        .map((player) => nameKey(player.name)),
+    );
+    const activeAiPlayers = this.state.players
+      .filter((player) => player.active && player.controller.kind === "ai")
+      .sort((left, right) => left.team.localeCompare(right.team) || left.slot - right.slot);
+    for (const player of activeAiPlayers) {
+      player.name = createUniqueAiName(player.fallbackName, usedNames);
+      player.badge = player.fallbackBadge;
+      usedNames.add(nameKey(player.name));
+    }
+  }
+
   private typing(playerId: string) {
     return this.state.typingByPlayer[playerId] ?? (this.state.typingByPlayer[playerId] = { buffer: "", targetWordId: null });
   }
@@ -686,6 +738,7 @@ export class RoomEngine {
     this.clearTyping(player.id);
     this.clearTyping(target.id);
     if (wasHost) this.setHost(target);
+    this.reconcileAiNames();
     this.invalidateReadyStates();
     this.touch();
     return this.success(events);
@@ -693,9 +746,11 @@ export class RoomEngine {
 
   private movePlayer(actor: InternalPlayer, playerId: string, direction: -1 | 1, events: RoomEvent[]): EngineResult {
     if (this.state.phase !== "lobby") return this.failure("WRONG_STAGE", "Formation can only change in the lobby.", events);
-    if (actor.controller.kind !== "human" || !actor.controller.isHost) return this.failure("HOST_ONLY", "Only the host can edit formation.", events);
     const player = this.state.players.find((candidate) => candidate.active && candidate.id === playerId);
     if (!player) return this.failure("PLAYER_NOT_FOUND", "Formation player was not found.", events);
+    if (actor.controller.kind !== "human" || (!actor.controller.isHost && actor.id !== player.id)) {
+      return this.failure("SELF_ONLY", "普通玩家只能调整自己的站位。", events);
+    }
     const teammate = this.activePlayers(player.team).find((candidate) => candidate.position === player.position + direction);
     if (!teammate) return this.failure("INVALID_MOVE", "The player cannot move farther in that direction.", events);
     const previous = player.position;
@@ -724,6 +779,7 @@ export class RoomEngine {
     }
     this.resizeTeam("pine", next.pineSize);
     this.resizeTeam("berry", next.berrySize);
+    this.reconcileAiNames();
     const wordbookChanged = next.wordbookId !== this.state.config.wordbookId;
     this.state.config = next;
     if (wordbookChanged) {
@@ -1048,6 +1104,7 @@ export class RoomEngine {
         .sort((left, right) => left.joinOrder - right.joinOrder)[0] ?? null;
       this.setHost(replacement);
     }
+    this.reconcileAiNames();
     for (const word of this.state.words) {
       if (word.aiPlayerId === null) this.assignWordAi(word, now);
     }
