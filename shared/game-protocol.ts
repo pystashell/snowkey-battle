@@ -56,6 +56,8 @@ export type RoomWord = {
   speed: number;
   drift: number;
   bornAt: number;
+  landedAt: number;
+  expiresAt: number;
   aiPlayerId: string | null;
   aiStartedAt: number | null;
   aiClaimAt: number | null;

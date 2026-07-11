@@ -14,6 +14,12 @@ import type {
   Team,
   WordbookId,
 } from "./game-protocol";
+import {
+  FROST_WORD_POOL_SIZE,
+  buildWordPools,
+  drawWordFromBag,
+  wordHistorySize,
+} from "./word-pools.ts";
 
 const PROTOCOL_VERSION = 1 as const;
 const MAX_TEAM_SIZE = 4;
@@ -25,11 +31,13 @@ const ATTACK_RESOLVE_DELAY_MS = 1_510;
 const ACTOR_QUEUE_INTERVAL_MS = 1_850;
 const COMBO_WINDOW_MS = 4_200;
 const MAX_PLAYER_NAME_LENGTH = 8;
-const FROST_WORD_MIN_LENGTH = 11;
 const FROST_SPAWN_CHANCE = 0.08;
 const FROST_DAMAGE = 15;
 const FROST_FREEZE_MS = 1_000;
 const PLAYER_MAX_HEALTH = 100;
+const WORD_START_Y = 7;
+const WORD_GROUND_TTL_MS = 2_000;
+const WORD_POOL_VERSION = 2;
 
 type RandomSource = () => number;
 
@@ -75,9 +83,12 @@ type EngineState = {
   nextAttackId: number;
   nextJoinOrder: number;
   nextSpawnAt: number | null;
+  wordPoolVersion: number;
   wordBagBookId: WordbookId;
   wordBag: string[];
+  frostWordBag: string[];
   recentWords: string[];
+  recentFrostWords: string[];
   deferredEvents: RoomEvent[];
 };
 
@@ -134,7 +145,7 @@ export type EngineJoinResult = EngineJoinSuccess | EngineFailure;
 type DueTask = {
   at: number;
   priority: number;
-  kind: "event" | "countdown" | "disconnect" | "ai" | "attack" | "spawn";
+  kind: "event" | "countdown" | "disconnect" | "word-expire" | "ai" | "attack" | "spawn";
   id: string;
 };
 
@@ -216,12 +227,14 @@ function sanitizeWords(words: readonly string[]) {
   return Array.from(new Set(words.map((word) => word.trim().toLowerCase()).filter((word) => /^[a-z]{1,14}$/.test(word))));
 }
 
-function isFrostWordCandidate(word: string) {
-  return word.length >= FROST_WORD_MIN_LENGTH;
-}
-
 function hasPrefixCollision(candidate: string, activeWords: Set<string>) {
   return [...activeWords].some((active) => candidate.startsWith(active) || active.startsWith(candidate));
+}
+
+function calculateWordLandedAt(bornAt: number, restY: number, speed: number) {
+  const safeSpeed = Number.isFinite(speed) && speed > 0 ? speed : 4;
+  const fallDistance = Math.max(0, restY - WORD_START_Y);
+  return bornAt + Math.ceil((fallDistance / safeSpeed) * 1_000);
 }
 
 export function calculateWordDamage(length: number) {
@@ -306,10 +319,25 @@ export class RoomEngine {
         : clamp(Math.round(healthRatio * PLAYER_MAX_HEALTH), 1, PLAYER_MAX_HEALTH);
       delete (player as InternalPlayer & { role?: unknown }).role;
     }
-    for (const word of this.state.words) word.kind ??= "normal";
+    for (const word of this.state.words) {
+      word.kind ??= "normal";
+      word.landedAt ??= calculateWordLandedAt(word.bornAt, word.restY, word.speed);
+      word.expiresAt ??= word.landedAt + WORD_GROUND_TTL_MS;
+    }
     for (const attack of this.state.pendingAttacks) {
       attack.kind ??= "normal";
       attack.targetIds ??= attack.targetId ? [attack.targetId] : [];
+    }
+    if (this.state.wordPoolVersion !== WORD_POOL_VERSION) {
+      this.state.wordPoolVersion = WORD_POOL_VERSION;
+      this.state.wordBagBookId = this.state.config.wordbookId;
+      this.state.wordBag = [];
+      this.state.frostWordBag = [];
+      this.state.recentWords = [];
+      this.state.recentFrostWords = [];
+    } else {
+      this.state.frostWordBag ??= [];
+      this.state.recentFrostWords ??= [];
     }
     this.random = options.random ?? Math.random;
     const supplied = options.wordbooks ?? {};
@@ -330,6 +358,7 @@ export class RoomEngine {
       mixed: mixed.length ? mixed : DEFAULT_WORDBOOKS.winter,
     };
     this.reconcileAiNames();
+    this.reconcileHostInvariant();
   }
 
   static create(input: CreateRoomEngineInput) {
@@ -367,9 +396,12 @@ export class RoomEngine {
       nextAttackId: 1,
       nextJoinOrder: 2,
       nextSpawnAt: null,
+      wordPoolVersion: WORD_POOL_VERSION,
       wordBagBookId: config.wordbookId,
       wordBag: [],
+      frostWordBag: [],
       recentWords: [],
+      recentFrostWords: [],
       deferredEvents: [],
     };
     return new RoomEngine(state, input);
@@ -415,6 +447,9 @@ export class RoomEngine {
 
   join(input: JoinRoomEngineInput): EngineJoinResult {
     const events = this.advance(input.now).events;
+    if (this.humanPlayers().length === 0) {
+      return this.failure("ROOM_NOT_FOUND", "This room no longer has any human players.", events);
+    }
     if (!input.sessionId || !input.reconnectToken) {
       return this.failure("INVALID_CREDENTIALS", "Session and reconnect token are required.", events);
     }
@@ -609,23 +644,34 @@ export class RoomEngine {
       ? { startedAt: rawTiming.startedAt + frozenDelay, claimAt: rawTiming.claimAt + frozenDelay }
       : null;
     const id = this.state.nextWordId++;
+    const restY = 52 + ((id * 11) % 20);
+    const x = 17 + this.roll() * 66;
+    const speed = 4 + this.roll() * 2.3;
+    const landedAt = calculateWordLandedAt(now, restY, speed);
     const word: RoomWord = {
       id,
       text,
       kind,
-      x: 17 + this.roll() * 66,
-      restY: 52 + ((id * 11) % 20),
-      speed: 4 + this.roll() * 2.3,
+      x,
+      restY,
+      speed,
       drift: -13 + this.roll() * 26,
       bornAt: now,
+      landedAt,
+      expiresAt: landedAt + WORD_GROUND_TTL_MS,
       aiPlayerId: ai?.id ?? null,
       aiStartedAt: timing?.startedAt ?? null,
       aiClaimAt: timing?.claimAt ?? null,
     };
     this.state.words.push(word);
-    const poolSize = this.wordbooks[this.state.config.wordbookId].length;
-    const historySize = clamp(Math.round(poolSize * 0.2), Math.min(4, poolSize), Math.min(48, Math.max(4, poolSize)));
-    this.state.recentWords = [...this.state.recentWords, text].slice(-historySize);
+    const pools = buildWordPools(this.wordbooks[this.state.config.wordbookId]);
+    if (kind === "frost") {
+      const historySize = Math.min(3, Math.max(1, pools.frostWords.length - 1));
+      this.state.recentFrostWords = [...this.state.recentFrostWords, text].slice(-historySize);
+    } else {
+      const historySize = wordHistorySize(pools.regularWords.length);
+      this.state.recentWords = [...this.state.recentWords, text].slice(-historySize);
+    }
     this.touch();
     return clone(word);
   }
@@ -834,7 +880,9 @@ export class RoomEngine {
     if (wordbookChanged) {
       this.state.wordBagBookId = next.wordbookId;
       this.state.wordBag = [];
+      this.state.frostWordBag = [];
       this.state.recentWords = [];
+      this.state.recentFrostWords = [];
     }
     this.invalidateReadyStates();
     this.touch();
@@ -971,7 +1019,7 @@ export class RoomEngine {
     if (this.state.phase !== "playing") return false;
     const wordIndex = this.state.words.findIndex((word) => word.id === wordId);
     const attacker = this.state.players.find((player) => player.active && player.id === attackerId && player.health > 0);
-    if (wordIndex < 0 || !attacker || attacker.frozenUntil > now) return false;
+    if (wordIndex < 0 || !attacker || attacker.frozenUntil > now || this.state.words[wordIndex].expiresAt <= now) return false;
     const [word] = this.state.words.splice(wordIndex, 1);
     let damage = word.kind === "frost" ? FROST_DAMAGE : calculateWordDamage(word.text.length);
     if (attacker.controller.kind === "human") {
@@ -1045,13 +1093,18 @@ export class RoomEngine {
     }
     if (this.state.phase === "playing") {
       for (const word of this.state.words) {
-        if (word.aiClaimAt !== null) tasks.push({ at: word.aiClaimAt, priority: 2, kind: "ai", id: String(word.id) });
+        if (word.aiClaimAt !== null) tasks.push({ at: word.aiClaimAt, priority: 3, kind: "ai", id: String(word.id) });
       }
-      if (this.state.nextSpawnAt !== null) tasks.push({ at: this.state.nextSpawnAt, priority: 4, kind: "spawn", id: "spawn" });
+      if (this.state.nextSpawnAt !== null) tasks.push({ at: this.state.nextSpawnAt, priority: 5, kind: "spawn", id: "spawn" });
+    }
+    if (this.state.phase === "playing" || this.state.phase === "ended") {
+      for (const word of this.state.words) {
+        tasks.push({ at: word.expiresAt, priority: 2, kind: "word-expire", id: String(word.id) });
+      }
     }
     if (this.state.phase === "playing" || this.state.phase === "ended") {
       for (const attack of this.state.pendingAttacks) {
-        if (!attack.resolved) tasks.push({ at: attack.resolveAt, priority: 3, kind: "attack", id: attack.id });
+        if (!attack.resolved) tasks.push({ at: attack.resolveAt, priority: 4, kind: "attack", id: attack.id });
       }
     }
     return tasks.sort((left, right) => {
@@ -1093,6 +1146,24 @@ export class RoomEngine {
       const player = this.state.players.find((candidate) => candidate.id === task.id);
       if (!player || player.controller.kind !== "human" || player.controller.connected || player.disconnectDeadline !== task.at) return;
       this.replaceHumanWithAi(player, task.at, events);
+      return;
+    }
+    if (task.kind === "word-expire") {
+      const wordIndex = this.state.words.findIndex((candidate) => (
+        candidate.id === Number(task.id) && candidate.expiresAt === task.at
+      ));
+      if (wordIndex < 0) return;
+      const [expiredWord] = this.state.words.splice(wordIndex, 1);
+      for (const [playerId, typing] of Object.entries(this.state.typingByPlayer)) {
+        if (typing.targetWordId === expiredWord.id) {
+          this.clearTyping(playerId);
+          continue;
+        }
+        if (typing.buffer && !this.state.words.some((word) => word.text.startsWith(typing.buffer))) {
+          this.clearTyping(playerId);
+        }
+      }
+      this.touch();
       return;
     }
     if (task.kind === "ai") {
@@ -1210,7 +1281,6 @@ export class RoomEngine {
   }
 
   private replaceHumanWithAi(player: InternalPlayer, now: number, events: RoomEvent[]) {
-    const wasHost = player.controller.kind === "human" && player.controller.isHost;
     player.controller = { kind: "ai", level: player.fallbackAiLevel };
     player.sessionId = null;
     player.reconnectToken = null;
@@ -1218,12 +1288,7 @@ export class RoomEngine {
     player.combo = 0;
     player.lastClaimAt = 0;
     this.clearTyping(player.id);
-    if (wasHost) {
-      const replacement = this.humanPlayers()
-        .filter((candidate) => candidate.id !== player.id && candidate.controller.kind === "human" && candidate.controller.connected)
-        .sort((left, right) => left.joinOrder - right.joinOrder)[0] ?? null;
-      this.setHost(replacement);
-    }
+    this.reconcileHostInvariant();
     this.reconcileAiNames();
     for (const word of this.state.words) {
       if (word.aiPlayerId === null) this.assignWordAi(word, now);
@@ -1251,9 +1316,19 @@ export class RoomEngine {
 
   private setHost(player: InternalPlayer | null) {
     for (const candidate of this.humanPlayers()) {
-      if (candidate.controller.kind === "human") candidate.controller.isHost = candidate.id === player?.id;
+      if (candidate.controller.kind !== "human") continue;
+      candidate.controller.isHost = candidate.id === player?.id;
+      if (candidate.controller.isHost) candidate.controller.ready = true;
     }
     this.state.hostPlayerId = player?.id ?? null;
+  }
+
+  private reconcileHostInvariant() {
+    const humans = this.humanPlayers().sort((left, right) => left.joinOrder - right.joinOrder);
+    const current = humans.find((player) => player.id === this.state.hostPlayerId) ?? null;
+    const flagged = humans.find((player) => player.controller.kind === "human" && player.controller.isHost) ?? null;
+    const connected = humans.find((player) => player.controller.kind === "human" && player.controller.connected) ?? null;
+    this.setHost(current ?? flagged ?? connected ?? humans[0] ?? null);
   }
 
   private freezePlayer(player: InternalPlayer, now: number) {
@@ -1295,44 +1370,44 @@ export class RoomEngine {
   }
 
   private drawFrostWord(activeTexts: Set<string>) {
-    const source = this.wordbooks[this.state.config.wordbookId].filter(isFrostWordCandidate);
-    const recent = new Set(this.state.recentWords);
-    const fresh = source.filter((word) => !activeTexts.has(word) && !recent.has(word) && !hasPrefixCollision(word, activeTexts));
-    const fallback = source.filter((word) => !activeTexts.has(word) && !hasPrefixCollision(word, activeTexts));
-    const word = this.randomItem(fresh.length ? fresh : fallback);
-    if (word) this.state.wordBag = this.state.wordBag.filter((candidate) => candidate !== word);
-    return word;
+    this.reconcileWordBagBook();
+    const pool = buildWordPools(this.wordbooks[this.state.config.wordbookId]).frostWords;
+    const draw = drawWordFromBag({
+      bag: this.state.frostWordBag,
+      pool,
+      activeWords: activeTexts,
+      recentWords: new Set(this.state.recentFrostWords),
+      avoidImmediateWord: this.state.recentFrostWords.at(-1) ?? null,
+      random: () => this.roll(),
+    });
+    this.state.frostWordBag = draw.bag;
+    return draw.word;
   }
 
   private drawWord(activeTexts: Set<string>) {
+    this.reconcileWordBagBook();
+    const pool = buildWordPools(this.wordbooks[this.state.config.wordbookId]).regularWords;
+    const draw = drawWordFromBag({
+      bag: this.state.wordBag,
+      pool,
+      activeWords: activeTexts,
+      recentWords: new Set(this.state.recentWords),
+      avoidImmediateWord: this.state.recentWords.at(-1) ?? null,
+      random: () => this.roll(),
+    });
+    this.state.wordBag = draw.bag;
+    return draw.word;
+  }
+
+  private reconcileWordBagBook() {
     const bookId = this.state.config.wordbookId;
     if (this.state.wordBagBookId !== bookId) {
       this.state.wordBagBookId = bookId;
       this.state.wordBag = [];
+      this.state.frostWordBag = [];
       this.state.recentWords = [];
+      this.state.recentFrostWords = [];
     }
-    if (!this.state.wordBag.length) {
-      const recent = new Set(this.state.recentWords);
-      const source = this.wordbooks[bookId];
-      const regularSource = source.filter((word) => !isFrostWordCandidate(word));
-      const pool = regularSource.length ? regularSource : source;
-      const fresh = pool.filter((word) => !recent.has(word));
-      this.state.wordBag = this.shuffle(fresh.length ? fresh : pool);
-    }
-    const recent = new Set(this.state.recentWords);
-    let index = this.state.wordBag.findIndex((word) => !activeTexts.has(word) && !recent.has(word) && !hasPrefixCollision(word, activeTexts));
-    if (index < 0) index = this.state.wordBag.findIndex((word) => !activeTexts.has(word) && !hasPrefixCollision(word, activeTexts));
-    if (index < 0) return null;
-    return this.state.wordBag.splice(index, 1)[0];
-  }
-
-  private shuffle(words: readonly string[]) {
-    const shuffled = [...words];
-    for (let index = shuffled.length - 1; index > 0; index -= 1) {
-      const swap = Math.floor(this.roll() * (index + 1));
-      [shuffled[index], shuffled[swap]] = [shuffled[swap], shuffled[index]];
-    }
-    return shuffled;
   }
 }
 
@@ -1342,9 +1417,12 @@ export const ROOM_ENGINE_CONSTANTS = {
   disconnectGraceMs: DISCONNECT_GRACE_MS,
   countdownMs: COUNTDOWN_MS,
   actorQueueIntervalMs: ACTOR_QUEUE_INTERVAL_MS,
-  frostWordMinLength: FROST_WORD_MIN_LENGTH,
+  frostWordPoolSize: FROST_WORD_POOL_SIZE,
   frostSpawnChance: FROST_SPAWN_CHANCE,
   frostDamage: FROST_DAMAGE,
   frostFreezeMs: FROST_FREEZE_MS,
+  wordGroundTtlMs: WORD_GROUND_TTL_MS,
+  wordStartY: WORD_START_Y,
+  wordPoolVersion: WORD_POOL_VERSION,
   attackResolveDelayMs: ATTACK_RESOLVE_DELAY_MS,
 } as const;

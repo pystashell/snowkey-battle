@@ -3929,12 +3929,44 @@ select:focus-visible {
   to { translate: 9px 3px; rotate: 3deg; scale: 1.06; }
 }
 
+/* The final 350ms visibly collapse an unclaimed word into its snow puddle. */
+.snow-word.is-resting.is-melting .snow-word__sway {
+  transform-origin: 50% 90%;
+  animation: word-melt 350ms cubic-bezier(0.55, 0.02, 0.78, 0.34) forwards;
+}
+
+.snow-word.is-resting.is-melting::after {
+  transform-origin: center;
+  animation: word-melt-puddle 350ms ease-out forwards;
+}
+
+.snow-word.is-melting .snow-word__state,
+.snow-word.is-melting .snow-word__power {
+  animation: word-melt-label 260ms ease-in forwards;
+}
+
+@keyframes word-melt {
+  from { translate: 0 0; scale: 1; opacity: 1; filter: blur(0); }
+  58% { translate: 0 4px; scale: 0.82 0.62; opacity: 0.78; filter: blur(0.4px); }
+  to { translate: 0 11px; scale: 0.24 0.08; opacity: 0; filter: blur(2px); }
+}
+
+@keyframes word-melt-puddle {
+  from { transform: scaleX(0.72); opacity: 0.72; }
+  to { transform: scaleX(1.55); opacity: 0; }
+}
+
+@keyframes word-melt-label {
+  to { translate: 0 5px; opacity: 0; }
+}
+
 @keyframes kid-freeze-pulse {
   to { box-shadow: inset 0 0 22px rgba(255, 255, 255, 0.92), 0 0 24px rgba(79, 222, 255, 1); }
 }
 
 .game-shell--paused .kid *,
 .game-shell--paused .snow-word *,
+.game-shell--paused .snow-word::after,
 .game-shell--paused .catch-effect,
 .game-shell--paused .catch-effect *,
 .game-shell--paused .projectile,

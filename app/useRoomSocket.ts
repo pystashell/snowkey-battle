@@ -488,7 +488,9 @@ export function useRoomSocket(options: UseRoomSocketOptions = {}) {
     clearPingTimer();
     const socket = socketRef.current;
     socketRef.current = null;
-    if (socket && socket.readyState < WebSocket.CLOSING) socket.close(1000, "left room");
+    if (socket && socket.readyState < WebSocket.CLOSING) {
+      socket.close(1000, forgetCredentials ? "left room" : "switch mode");
+    }
 
     const credentials = credentialsRef.current;
     if (credentials && forgetCredentials) {

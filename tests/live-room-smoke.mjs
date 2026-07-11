@@ -25,9 +25,11 @@ class RoomClient {
     this.messages = [];
     this.waiters = [];
     this.socket = null;
+    this.closeEvent = null;
+    this.closeWaiters = [];
   }
 
-  async connect() {
+  async connect({ allowError = false, timeoutMs = 10_000 } = {}) {
     this.socket = new WebSocket(`${socketBase}/api/rooms/${this.roomCode}/socket`);
     this.socket.addEventListener("message", (message) => {
       const parsed = JSON.parse(String(message.data));
@@ -39,8 +41,15 @@ class RoomClient {
         waiter.resolve(parsed);
       }
     });
+    this.socket.addEventListener("close", (event) => {
+      this.closeEvent = event;
+      for (const waiter of this.closeWaiters.splice(0)) {
+        clearTimeout(waiter.timer);
+        waiter.resolve(event);
+      }
+    });
     await new Promise((resolve, reject) => {
-      const timer = setTimeout(() => reject(new Error("WebSocket open timed out")), 10_000);
+      const timer = setTimeout(() => reject(new Error("WebSocket open timed out")), timeoutMs);
       this.socket.addEventListener("open", () => {
         clearTimeout(timer);
         this.socket.send(JSON.stringify({
@@ -55,7 +64,14 @@ class RoomClient {
         reject(new Error("WebSocket connection failed"));
       }, { once: true });
     });
-    return this.waitFor((message) => message.type === "welcome");
+    const outcome = await this.waitFor(
+      (message) => message.type === "welcome" || message.type === "error",
+      timeoutMs,
+    );
+    if (outcome.type === "error" && !allowError) {
+      throw new Error(`Room join failed (${outcome.code}): ${outcome.message}`);
+    }
+    return outcome;
   }
 
   send(command) {
@@ -82,12 +98,24 @@ class RoomClient {
     });
   }
 
+  waitForClose(timeoutMs = 5_000) {
+    if (this.closeEvent) return Promise.resolve(this.closeEvent);
+    return new Promise((resolve, reject) => {
+      const waiter = { resolve, timer: 0 };
+      waiter.timer = setTimeout(() => {
+        this.closeWaiters = this.closeWaiters.filter((candidate) => candidate !== waiter);
+        reject(new Error("Timed out waiting for room socket to close"));
+      }, timeoutMs);
+      this.closeWaiters.push(waiter);
+    });
+  }
+
   close() {
     if (this.socket?.readyState === WebSocket.OPEN) this.socket.close(1000, "smoke test complete");
   }
 }
 
-const hostIdentity = credentials("阿澄");
+const hostIdentity = credentials("Host");
 const createResponse = await fetch(`${baseUrl}/api/rooms`, {
   method: "POST",
   headers: { "content-type": "application/json" },
@@ -100,16 +128,21 @@ const { roomCode } = await createResponse.json();
 assert.match(roomCode, /^[A-HJ-NP-Z2-9]{6}$/);
 
 const host = new RoomClient(roomCode, hostIdentity);
-const guest = new RoomClient(roomCode, credentials("好友测试"));
+const guest = new RoomClient(roomCode, credentials("Guest"));
+let rejected = null;
 
 try {
   const hostWelcome = await host.connect();
   const guestWelcome = await guest.connect();
   assert.equal(hostWelcome.snapshot.selfPlayerId, "pine-0");
   assert.notEqual(guestWelcome.snapshot.selfPlayerId, hostWelcome.snapshot.selfPlayerId);
-  assert.equal(hostWelcome.snapshot.players.find((player) => player.id === "pine-0")?.name, "阿澄");
-  assert.equal(hostWelcome.snapshot.players.find((player) => player.id === "pine-1")?.name, "阿澄AI");
-  assert.equal(guestWelcome.snapshot.players.find((player) => player.id === guestWelcome.snapshot.selfPlayerId)?.name, "好友测试");
+  assert.equal(hostWelcome.snapshot.players.find((player) => player.id === "pine-0")?.name, "Host");
+  assert.notEqual(hostWelcome.snapshot.players.find((player) => player.id === "pine-1")?.name, "Host");
+  assert.equal(
+    new Set(hostWelcome.snapshot.players.map((player) => player.name.toLowerCase())).size,
+    hostWelcome.snapshot.players.length,
+  );
+  assert.equal(guestWelcome.snapshot.players.find((player) => player.id === guestWelcome.snapshot.selfPlayerId)?.name, "Guest");
   assert.ok(hostWelcome.snapshot.players.every((player) => player.maxHealth === 100 && player.health === 100));
 
   guest.send({ op: "lobby.move", playerId: guestWelcome.snapshot.selfPlayerId, direction: 1 });
@@ -121,45 +154,57 @@ try {
     && message.snapshot.revision > guestMoved.snapshot.revision);
 
   host.send({ op: "lobby.set_config", config: {
-    pineSize: 1,
-    berrySize: 2,
+    pineSize: 2,
+    berrySize: 1,
     snowfallLevel: "light",
     wordbookId: "postgraduate",
   } });
   await host.waitFor((message) => message.type === "snapshot"
-    && message.snapshot.config.pineSize === 1
-    && message.snapshot.config.berrySize === 2
+    && message.snapshot.config.pineSize === 2
+    && message.snapshot.config.berrySize === 1
     && message.snapshot.config.wordbookId === "postgraduate");
 
-  host.send({ op: "presence.ready", ready: true });
-  guest.send({ op: "presence.ready", ready: true });
-  await host.waitFor((message) => message.type === "snapshot" && message.snapshot.players
-    .filter((player) => player.controller.kind === "human")
-    .every((player) => player.controller.connected && player.controller.ready));
+  host.send({ op: "presence.leave" });
+  const promoted = await guest.waitFor((message) => message.type === "snapshot"
+    && message.snapshot.hostPlayerId === guestWelcome.snapshot.selfPlayerId
+    && message.snapshot.humanCount === 1
+    && message.snapshot.players.find((player) => player.id === guestWelcome.snapshot.selfPlayerId)?.controller.isHost === true
+    && message.snapshot.players.find((player) => player.id === hostWelcome.snapshot.selfPlayerId)?.controller.kind === "ai");
+  assert.equal(promoted.snapshot.phase, "lobby");
 
-  host.send({ op: "match.start" });
-  const playing = await host.waitFor((message) => message.type === "snapshot" && message.snapshot.phase === "playing", 20_000);
+  guest.send({ op: "presence.ready", ready: true });
+  await guest.waitFor((message) => message.type === "snapshot"
+    && message.snapshot.players.find((player) => player.id === guestWelcome.snapshot.selfPlayerId)?.controller.ready === true);
+
+  guest.send({ op: "match.start" });
+  const playing = await guest.waitFor(
+    (message) => message.type === "snapshot" && message.snapshot.phase === "playing",
+    20_000,
+  );
   assert.ok(playing.snapshot.words.length > 0);
-  const berryBefore = playing.snapshot.players
-    .filter((player) => player.team === "berry")
+  const pineBefore = playing.snapshot.players
+    .filter((player) => player.team === "pine")
     .sort((left, right) => left.position - right.position);
-  assert.equal(berryBefore.length, 2);
+  assert.equal(pineBefore.length, 2);
   const word = playing.snapshot.words.find((candidate) => candidate.kind === "frost");
   assert.ok(word);
-  for (const key of word.text) host.send({ op: "type.key", key });
+  for (const key of word.text) guest.send({ op: "type.key", key });
 
-  const claim = await host.waitFor((message) => message.type === "event"
+  const claim = await guest.waitFor((message) => message.type === "event"
     && message.event.type === "word.claimed"
-    && message.event.attackerId === hostWelcome.snapshot.selfPlayerId
+    && message.event.attackerId === guestWelcome.snapshot.selfPlayerId
     && message.event.word.text === word.text);
-  const hit = await host.waitFor((message) => message.type === "event"
+  const hit = await guest.waitFor((message) => message.type === "event"
     && message.event.type === "attack.resolved"
     && message.event.attackId === claim.event.attackId);
   assert.equal(hit.event.actualDamage, 15);
   assert.equal(typeof hit.event.frozenUntil, "number");
   assert.equal(hit.event.kind, "frost");
   assert.equal(hit.event.hits.length, 2);
-  assert.deepEqual(new Set(hit.event.hits.map((target) => target.targetId)), new Set(berryBefore.map((player) => player.id)));
+  assert.deepEqual(
+    new Set(hit.event.hits.map((target) => target.targetId)),
+    new Set(pineBefore.map((player) => player.id)),
+  );
   assert.ok(hit.event.hits.every((target) => target.actualDamage === 15 && typeof target.frozenUntil === "number"));
 
   const guestSynced = await guest.waitFor((message) => message.type === "snapshot"
@@ -169,8 +214,21 @@ try {
       && player.frozenUntil === target.frozenUntil)));
   assert.equal(guestSynced.snapshot.code, roomCode);
 
-  host.send({ op: "presence.leave" });
+  const roomClosedPromise = guest.waitFor(
+    (message) => message.type === "error" && message.code === "ROOM_NOT_FOUND",
+    5_000,
+  );
   guest.send({ op: "presence.leave" });
+  const roomClosed = await roomClosedPromise;
+  assert.match(roomClosed.message, /closed|no longer exists|left/i);
+  const guestClose = await guest.waitForClose();
+  assert.equal(guestClose.code, 4404);
+
+  rejected = new RoomClient(roomCode, credentials("LateGuest"));
+  const rejectedJoin = await rejected.connect({ allowError: true, timeoutMs: 5_000 });
+  assert.equal(rejectedJoin.type, "error");
+  assert.equal(rejectedJoin.code, "ROOM_NOT_FOUND");
+
   console.log(JSON.stringify({
     ok: true,
     roomCode,
@@ -181,9 +239,13 @@ try {
     hitCount: hit.event.hits.length,
     frozeWholeEnemyTeamForOneSecond: true,
     guestMovedOwnSeat: true,
+    hostTransferredToGuest: true,
+    roomClosedAfterLastHumanLeft: true,
+    retiredRoomRejectedLateJoin: true,
     synchronizedRevision: guestSynced.snapshot.revision,
   }, null, 2));
 } finally {
   host.close();
   guest.close();
+  rejected?.close();
 }

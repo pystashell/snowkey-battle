@@ -47,7 +47,9 @@ test("server-renders the Chinese snow fighting game for a Chinese browser", asyn
   assert.match(html, /考研英语 · 阅读精选/);
   assert.match(html, /经典情景英语 · 入门/);
   assert.match(html, /aria-label="选择雪花密度"/);
-  assert.match(html, /普通伤害 10 \/ 11 \/ 12 \/ 13 · 冰晶群伤 15 \+ 全体冻结 1 秒/);
+  assert.match(html, /普通伤害 10 \/ 11 \/ 12 \/ 13 · 最长 10 词轮换冰晶 · 群伤 15 \+ 全体冻结 1 秒/);
+  assert.match(html, /英文雪花落地 2 秒后融化/);
+  assert.doesNotMatch(html, /英文雪花直到被抢才消失/);
   assert.match(html, /新雪球锁定当前前排/);
   assert.match(html, /全员 100 HP/);
   assert.doesNotMatch(html, /肉盾|快手|职业与速度/);
@@ -65,7 +67,9 @@ test("server-renders the complete English lobby for a non-Chinese browser", asyn
   assert.match(html, /Start with This Formation/);
   assert.match(html, /Pine team size/);
   assert.match(html, /CET-6 · Advanced Selection/);
-  assert.match(html, /Frost area damage 15 \+ 1-second team freeze/);
+  assert.match(html, /The 10 longest words rotate as frost words · 15 area damage \+ 1-second team freeze/);
+  assert.match(html, /Words melt 2 seconds after landing/);
+  assert.doesNotMatch(html, /Words remain until claimed/);
   assert.match(html, /Everyone has 100 HP/);
   assert.match(html, /语言 \/ Language/);
 });

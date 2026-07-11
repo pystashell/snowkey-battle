@@ -7,6 +7,7 @@ import {
   calculateAiTiming,
   calculateWordDamage,
 } from "../shared/room-engine.ts";
+import { buildWordPools } from "../shared/word-pools.ts";
 
 const CODE = "ABC234";
 const HOST_SESSION = "host-session";
@@ -218,6 +219,98 @@ test("a disconnected human is replaced by AI exactly at 60 seconds", () => {
   assert.equal(replacement?.badge, "团");
 });
 
+test("a join arriving when the last reconnect deadline expires cannot revive an empty room", () => {
+  const engine = createEngine();
+  assert.equal(engine.disconnect(HOST_SESSION, 20).ok, true);
+
+  const tooLate = engine.join({
+    sessionId: "late-session",
+    reconnectToken: "late-reconnect-token-123456789",
+    name: "迟到者",
+    now: 20 + ROOM_ENGINE_CONSTANTS.disconnectGraceMs,
+  });
+  assert.equal(tooLate.ok, false);
+  assert.equal(tooLate.code, "ROOM_NOT_FOUND");
+  assert.equal(engine.snapshot(20 + ROOM_ENGINE_CONSTANTS.disconnectGraceMs).humanCount, 0);
+  assert.equal(engine.snapshot(20 + ROOM_ENGINE_CONSTANTS.disconnectGraceMs).hostPlayerId, null);
+});
+
+test("an explicitly departing host immediately promotes the earliest remaining human", () => {
+  const engine = createEngine();
+  const guest = join(engine, 1, 10);
+  assert.equal(guest.ok, true);
+
+  const left = engine.handleCommand(HOST_SESSION, { op: "presence.leave" }, 20);
+  assert.equal(left.ok, true);
+  const snapshot = engine.snapshot(20, "guest-1");
+  assert.equal(snapshot.humanCount, 1);
+  assert.equal(snapshot.hostPlayerId, guest.playerId);
+  assert.equal(snapshot.players.find((player) => player.id === guest.playerId)?.controller.isHost, true);
+  assert.equal(snapshot.players.find((player) => player.id === guest.playerId)?.controller.ready, true);
+
+  const configured = engine.handleCommand(
+    "guest-1",
+    { op: "lobby.set_config", config: { pineSize: 1, berrySize: 2 } },
+    21,
+  );
+  assert.equal(configured.ok, true);
+});
+
+test("host transfer includes a human inside the reconnect grace period", () => {
+  const engine = createEngine();
+  const guest = join(engine, 1, 10);
+  assert.equal(guest.ok, true);
+  assert.equal(engine.disconnect("guest-1", 20).ok, true);
+  assert.equal(engine.handleCommand(HOST_SESSION, { op: "presence.leave" }, 21).ok, true);
+
+  let snapshot = engine.snapshot(21);
+  assert.equal(snapshot.hostPlayerId, guest.playerId);
+  assert.equal(snapshot.players.find((player) => player.id === guest.playerId)?.controller.isHost, true);
+  assert.equal(snapshot.players.find((player) => player.id === guest.playerId)?.controller.connected, false);
+
+  const resumed = engine.join({
+    sessionId: "guest-1",
+    reconnectToken: "guest-token-1",
+    name: "好友归来",
+    now: 30,
+  });
+  assert.equal(resumed.ok, true);
+  snapshot = engine.snapshot(30, "guest-1");
+  assert.equal(snapshot.hostPlayerId, guest.playerId);
+  assert.equal(snapshot.selfPlayerId, guest.playerId);
+});
+
+test("the last explicit human departure leaves no owner for the worker to retire", () => {
+  const engine = createEngine();
+  const left = engine.leave(HOST_SESSION, 10);
+  assert.equal(left.ok, true);
+  const snapshot = engine.snapshot(10);
+  assert.equal(snapshot.humanCount, 0);
+  assert.equal(snapshot.hostPlayerId, null);
+  assert.equal(snapshot.players.some((player) => player.controller.kind === "human"), false);
+});
+
+test("restoring a legacy hostless room repairs a single valid host invariant", () => {
+  const engine = createEngine();
+  const guest = join(engine, 1, 10);
+  assert.equal(guest.ok, true);
+  const serialized = engine.serialize();
+  serialized.state.hostPlayerId = "pine-3";
+  for (const player of serialized.state.players) {
+    if (player.controller.kind === "human") player.controller.isHost = false;
+  }
+
+  const restored = RoomEngine.restore(serialized, {
+    random: () => 0.5,
+    wordbooks: { winter: TEST_BOOK },
+  });
+  const snapshot = restored.snapshot(10);
+  const hosts = snapshot.players.filter((player) => player.controller.kind === "human" && player.controller.isHost);
+  assert.equal(hosts.length, 1);
+  assert.equal(snapshot.hostPlayerId, "pine-0");
+  assert.equal(hosts[0].id, "pine-0");
+});
+
 test("switching teams keeps the human name and gives the vacated AI a unique name", () => {
   const engine = createEngine({ name: "小雪球" });
   const switched = engine.handleCommand(HOST_SESSION, { op: "lobby.set_team", team: "berry" }, 5);
@@ -254,19 +347,47 @@ test("prefix matching stays ambiguous, locks at one candidate, and rejects a bad
 });
 
 test("each match starts with one visible frost word and never keeps two frost words on the field", () => {
+  const words = ["snow", "river", "planet", "accountability", "counterpoint"];
   const engine = createEngine({
-    words: ["snow", "river", "planet", "accountability", "counterpoint"],
+    words,
   });
   const startedAt = start(engine);
   let snapshot = engine.snapshot(startedAt);
   const frostWords = snapshot.words.filter((word) => word.kind === "frost");
   assert.equal(frostWords.length, 1);
-  assert.ok(frostWords[0].text.length >= ROOM_ENGINE_CONSTANTS.frostWordMinLength);
+  assert.ok(buildWordPools(words).frostWords.includes(frostWords[0].text));
 
   engine.spawnWord(startedAt + 1);
   engine.spawnWord(startedAt + 2);
   snapshot = engine.snapshot(startedAt + 2);
   assert.equal(snapshot.words.filter((word) => word.kind === "frost").length, 1);
+});
+
+test("the authoritative frost bag rotates through the ten longest words before repeating", () => {
+  const words = [
+    "accountability", "infrastructure", "configuration", "socioeconomic", "comprehensive",
+    "indispensable", "differentiate", "architecture", "conventional", "intellectual",
+    "snow", "river", "planet", "harbor", "quartz", "winter", "forest", "glove", "cocoa", "star",
+  ];
+  const expectedPool = buildWordPools(words).frostWords;
+  const engine = createEngine({ words });
+  const startedAt = start(engine);
+  const drawn = [];
+
+  for (let index = 0; index < expectedPool.length; index += 1) {
+    let frostWord = engine.snapshot(startedAt + index).words.find((word) => word.kind === "frost");
+    if (!frostWord) frostWord = engine.spawnWord(startedAt + index, undefined, "frost");
+    assert.ok(frostWord);
+    drawn.push(frostWord.text);
+    const claim = typeWord(engine, HOST_SESSION, frostWord.text, startedAt + index);
+    assert.equal(claim.events[0]?.type, "word.claimed");
+  }
+
+  assert.equal(new Set(drawn).size, ROOM_ENGINE_CONSTANTS.frostWordPoolSize);
+  assert.deepEqual(new Set(drawn), new Set(expectedPool));
+  const next = engine.spawnWord(startedAt + expectedPool.length, undefined, "frost");
+  assert.ok(next);
+  assert.notEqual(next.text, drawn.at(-1));
 });
 
 test("a frost word deals 15 area damage and freezes every surviving opponent for exactly one second", () => {
@@ -618,6 +739,81 @@ test("AI claims only at its authoritative deadline and wins an exact-time tie", 
   assert.equal(engine.snapshot(claimAt).players.find((player) => player.id === tied.events[0].attackerId)?.controller.kind, "ai");
 });
 
+test("a word remains claimable before expiry, then melts exactly two seconds after landing", () => {
+  let engine = createEngine({ words: ["snow", "star", "river", "quartz", "harbor"] });
+  const startedAt = start(engine);
+  let serialized = engine.serialize();
+  serialized.state.words = [];
+  serialized.state.nextSpawnAt = null;
+  serialized.state.deferredEvents = [];
+  engine = RoomEngine.restore(serialized, {
+    random: () => 0.5,
+    wordbooks: { winter: ["snow", "star", "river", "quartz", "harbor"] },
+  });
+
+  const word = engine.spawnWord(startedAt + 1, "quartz", "normal");
+  assert.ok(word);
+  assert.equal(word.expiresAt - word.landedAt, ROOM_ENGINE_CONSTANTS.wordGroundTtlMs);
+  assert.equal(
+    word.landedAt,
+    word.bornAt + Math.ceil(((word.restY - ROOM_ENGINE_CONSTANTS.wordStartY) / word.speed) * 1_000),
+  );
+
+  serialized = engine.serialize();
+  const storedWord = serialized.state.words.find((candidate) => candidate.id === word.id);
+  storedWord.aiPlayerId = null;
+  storedWord.aiStartedAt = null;
+  storedWord.aiClaimAt = null;
+  engine = RoomEngine.restore(serialized, {
+    random: () => 0.5,
+    wordbooks: { winter: ["snow", "star", "river", "quartz", "harbor"] },
+  });
+
+  for (const key of "quart") {
+    assert.equal(engine.handleCommand(HOST_SESSION, { op: "type.key", key }, word.expiresAt - 1).ok, true);
+  }
+  assert.equal(engine.snapshot(word.expiresAt - 1).words.some((candidate) => candidate.id === word.id), true);
+  const expired = engine.handleCommand(HOST_SESSION, { op: "type.key", key: "z" }, word.expiresAt);
+  assert.equal(expired.ok, true);
+  assert.deepEqual(expired.events[0], { type: "typing.rejected", playerId: "pine-0", reason: "NO_MATCH" });
+  assert.equal(engine.snapshot(word.expiresAt).words.some((candidate) => candidate.id === word.id), false);
+  assert.deepEqual(engine.snapshot(word.expiresAt).typingByPlayer["pine-0"], { buffer: "", targetWordId: null });
+  assert.equal(engine.snapshot(word.expiresAt).pendingAttacks.length, 0);
+});
+
+test("melting wins an exact-time tie with AI and old stored words receive expiry timestamps", () => {
+  let engine = createEngine({ words: ["snow", "star", "river", "quartz"] });
+  const startedAt = start(engine);
+  let serialized = engine.serialize();
+  serialized.state.words = [];
+  serialized.state.nextSpawnAt = null;
+  serialized.state.deferredEvents = [];
+  engine = RoomEngine.restore(serialized, {
+    random: () => 0.5,
+    wordbooks: { winter: ["snow", "star", "river", "quartz"] },
+  });
+  const word = engine.spawnWord(startedAt + 1, "quartz", "normal");
+  assert.ok(word);
+
+  serialized = engine.serialize();
+  const storedWord = serialized.state.words.find((candidate) => candidate.id === word.id);
+  delete storedWord.landedAt;
+  delete storedWord.expiresAt;
+  storedWord.aiClaimAt = word.expiresAt;
+  const restored = RoomEngine.restore(serialized, {
+    random: () => 0.5,
+    wordbooks: { winter: ["snow", "star", "river", "quartz"] },
+  });
+  const migrated = restored.snapshot(startedAt + 1).words.find((candidate) => candidate.id === word.id);
+  assert.equal(migrated.expiresAt - migrated.landedAt, ROOM_ENGINE_CONSTANTS.wordGroundTtlMs);
+  assert.equal(migrated.expiresAt, word.expiresAt);
+
+  const due = restored.advance(migrated.expiresAt);
+  assert.equal(due.events.length, 0);
+  assert.equal(restored.snapshot(migrated.expiresAt).words.some((candidate) => candidate.id === word.id), false);
+  assert.equal(restored.snapshot(migrated.expiresAt).pendingAttacks.length, 0);
+});
+
 test("match-ending attack emits at most one event per advance and defers match.ended", () => {
   let engine = createEngine({ words: ["snow", "star", "river"] });
   engine.handleCommand(HOST_SESSION, { op: "lobby.set_config", config: { pineSize: 1, berrySize: 1 } }, 1);
@@ -673,6 +869,10 @@ test("restoring an old room migrates every role-based health pool to 100 HP prop
   serialized.state.players[1].maxHealth = 70;
   serialized.state.players[1].health = 0;
   serialized.state.players[1].role = "striker";
+  delete serialized.state.wordPoolVersion;
+  delete serialized.state.frostWordBag;
+  delete serialized.state.recentFrostWords;
+  serialized.state.wordBag = ["legacy"];
 
   const restored = RoomEngine.restore(serialized, {
     random: () => 0.5,
@@ -682,4 +882,7 @@ test("restoring an old room migrates every role-based health pool to 100 HP prop
   assert.ok(players.every((player) => player.maxHealth === 100 && !("role" in player)));
   assert.equal(players[0].health, 50);
   assert.equal(players[1].health, 0);
+  assert.equal(restored.serialize().state.wordPoolVersion, ROOM_ENGINE_CONSTANTS.wordPoolVersion);
+  assert.deepEqual(restored.serialize().state.wordBag, []);
+  assert.deepEqual(restored.serialize().state.frostWordBag, []);
 });

@@ -115,6 +115,7 @@ function defaultAttachment(connectedAt = Date.now()): SocketAttachment {
 export class GameRoom {
   private readonly ctx: DurableObjectState;
   private engine: RoomEngine | null = null;
+  private retiring = false;
   private lastActivityAt = 0;
   private lastSequenceBySession: Record<string, number> = {};
 
@@ -130,16 +131,36 @@ export class GameRoom {
         this.engine = RoomEngine.restore(stored.engine, ROOM_ENGINE_OPTIONS);
         this.lastActivityAt = stored.lastActivityAt;
         this.lastSequenceBySession = stored.lastSequenceBySession ?? {};
-
-        if ((await ctx.storage.getAlarm()) === null) {
-          await this.scheduleNextAlarm();
+        const now = Date.now();
+        if (now >= this.lastActivityAt + ROOM_IDLE_TTL_MS) {
+          await this.retireRoom(
+            "ROOM_EXPIRED",
+            "This room expired after being idle.",
+            "Room expired",
+          );
+          return;
         }
+        const result = this.engine.advance(now);
+
+        if (this.hasNoHumans(now)) {
+          await this.retireRoom(
+            "ROOM_NOT_FOUND",
+            "This room closed because no human players remained.",
+            "Room empty",
+          );
+          return;
+        }
+
+        await this.persist();
+        this.broadcastMutation(result, now);
+        await this.scheduleNextAlarm();
       } catch (error) {
         console.error("Unable to restore game room", error);
-        await ctx.storage.deleteAll();
         this.engine = null;
         this.lastActivityAt = 0;
         this.lastSequenceBySession = {};
+        if ((await ctx.storage.getAlarm()) !== null) await ctx.storage.deleteAlarm();
+        await ctx.storage.deleteAll();
       }
     });
   }
@@ -209,10 +230,9 @@ export class GameRoom {
     reason: string,
     wasClean: boolean,
   ): Promise<void> {
-    void code;
-    void reason;
     void wasClean;
-    await this.disconnectSocket(socket);
+    const explicitlyLeft = code === 1000 && reason === "left room";
+    await this.disconnectSocket(socket, explicitlyLeft);
   }
 
   async webSocketError(socket: WebSocket, error: unknown): Promise<void> {
@@ -226,25 +246,27 @@ export class GameRoom {
     if (!this.engine) return;
 
     if (now >= this.lastActivityAt + ROOM_IDLE_TTL_MS) {
-      for (const socket of this.ctx.getWebSockets()) {
-        this.sendError(socket, "ROOM_EXPIRED", "This room expired after being idle.");
-        this.closeSocket(socket, 4404, "Room expired");
-      }
-      await this.ctx.storage.deleteAll();
-      this.engine = null;
-      this.lastActivityAt = 0;
-      this.lastSequenceBySession = {};
+      await this.retireRoom("ROOM_EXPIRED", "This room expired after being idle.", "Room expired");
       return;
     }
 
     const result = this.engine.advance(now);
+    if (this.hasNoHumans(now)) {
+      this.broadcastMutation(result, now);
+      await this.retireRoom(
+        "ROOM_NOT_FOUND",
+        "This room closed because no human players remained.",
+        "Room empty",
+      );
+      return;
+    }
     await this.persist();
     this.broadcastMutation(result, now);
     await this.scheduleNextAlarm();
   }
 
   private async initialize(request: Request): Promise<Response> {
-    if (this.engine) return jsonResponse({ error: "Room code already exists" }, 409);
+    if (this.engine || this.retiring) return jsonResponse({ error: "Room code already exists" }, 409);
 
     const code = request.headers.get("X-Room-Code");
     if (!code || !/^[A-HJ-NP-Z2-9]{6}$/.test(code)) {
@@ -286,6 +308,8 @@ export class GameRoom {
       return jsonResponse({ error: "Expected WebSocket upgrade" }, 426);
     }
 
+    if (this.retiring) return jsonResponse({ error: "Room no longer exists" }, 404);
+
     if (this.ctx.getWebSockets().length >= MAX_SOCKET_CONNECTIONS) {
       return jsonResponse({ error: "Room has too many open connections" }, 429);
     }
@@ -300,7 +324,7 @@ export class GameRoom {
   }
 
   private async join(socket: WebSocket, message: JoinMessage): Promise<void> {
-    if (!this.engine) {
+    if (!this.engine || this.retiring) {
       this.sendError(socket, "ROOM_NOT_FOUND", "This room no longer exists.");
       this.closeSocket(socket, 4404, "Room not found");
       return;
@@ -317,6 +341,17 @@ export class GameRoom {
     if (!result.ok) {
       // Engine methods advance all already-due authoritative work before they
       // validate the requested action, so even a rejected join can carry state.
+      if (this.hasNoHumans(now)) {
+        this.broadcastMutation(result, now);
+        this.sendError(socket, result.code ?? "ROOM_NOT_FOUND", result.message ?? "This room no longer exists.");
+        this.closeSocket(socket, 4404, "Room not found");
+        await this.retireRoom(
+          "ROOM_NOT_FOUND",
+          "This room closed because no human players remained.",
+          "Room empty",
+        );
+        return;
+      }
       await this.persist();
       await this.scheduleNextAlarm();
       this.broadcastMutation(result, now);
@@ -405,6 +440,33 @@ export class GameRoom {
     }
 
     const result = this.engine.handleCommand(attachment.sessionId, message.command, now);
+    const explicitlyLeft = result.ok && message.command.op === "presence.leave";
+    if (explicitlyLeft) {
+      attachment.joined = false;
+      socket.serializeAttachment(attachment);
+    }
+    if (this.hasNoHumans(now)) {
+      if (result.ok) {
+        attachment.lastSequence = message.sequence;
+        socket.serializeAttachment(attachment);
+        this.lastSequenceBySession[attachment.sessionId] = message.sequence;
+        this.acknowledge(socket, message, result.revision);
+      } else {
+        this.sendError(
+          socket,
+          result.code ?? "COMMAND_REJECTED",
+          result.message ?? "The command was rejected.",
+          message.id,
+        );
+      }
+      this.broadcastMutation(result, now);
+      await this.retireRoom(
+        "ROOM_NOT_FOUND",
+        "This room closed because the last human player left.",
+        "Room empty",
+      );
+      return;
+    }
     if (!result.ok) {
       await this.persist();
       await this.scheduleNextAlarm();
@@ -429,19 +491,32 @@ export class GameRoom {
     this.broadcastMutation(result, now);
   }
 
-  private async disconnectSocket(socket: WebSocket): Promise<void> {
+  private async disconnectSocket(socket: WebSocket, explicitlyLeft = false): Promise<void> {
     const attachment = this.readAttachment(socket);
     if (!this.engine || !attachment.joined || !attachment.sessionId) return;
 
-    const hasReplacement = this.ctx.getWebSockets().some((candidate) => {
-      if (candidate === socket) return false;
-      const candidateAttachment = this.readAttachment(candidate);
-      return candidateAttachment.joined && candidateAttachment.sessionId === attachment.sessionId;
-    });
-    if (hasReplacement) return;
+    if (!explicitlyLeft) {
+      const hasReplacement = this.ctx.getWebSockets().some((candidate) => {
+        if (candidate === socket || candidate.readyState !== 1) return false;
+        const candidateAttachment = this.readAttachment(candidate);
+        return candidateAttachment.joined && candidateAttachment.sessionId === attachment.sessionId;
+      });
+      if (hasReplacement) return;
+    }
 
     const now = Date.now();
-    const result = this.engine.disconnect(attachment.sessionId, now);
+    const result = explicitlyLeft
+      ? this.engine.leave(attachment.sessionId, now)
+      : this.engine.disconnect(attachment.sessionId, now);
+    if (this.hasNoHumans(now)) {
+      this.broadcastMutation(result, now);
+      await this.retireRoom(
+        "ROOM_NOT_FOUND",
+        "This room closed because the last human player left.",
+        "Room empty",
+      );
+      return;
+    }
     if (!result.ok) {
       await this.persist();
       await this.scheduleNextAlarm();
@@ -453,6 +528,34 @@ export class GameRoom {
     await this.persist();
     await this.scheduleNextAlarm();
     this.broadcastMutation(result, now);
+  }
+
+  private hasNoHumans(now: number) {
+    return this.engine?.snapshot(now).humanCount === 0;
+  }
+
+  private async retireRoom(errorCode: string, message: string, closeReason: string): Promise<void> {
+    if (!this.engine || this.retiring) return;
+
+    // Make the room unreachable before the first await. Durable Object handlers
+    // can interleave at await boundaries, so this tombstone prevents a racing
+    // join from reviving an empty room while its stored state is being deleted.
+    this.retiring = true;
+    this.engine = null;
+    this.lastActivityAt = 0;
+    this.lastSequenceBySession = {};
+
+    for (const socket of this.ctx.getWebSockets()) {
+      this.sendError(socket, errorCode, message);
+      this.closeSocket(socket, 4404, closeReason);
+    }
+
+    try {
+      if ((await this.ctx.storage.getAlarm()) !== null) await this.ctx.storage.deleteAlarm();
+      await this.ctx.storage.deleteAll();
+    } finally {
+      this.retiring = false;
+    }
   }
 
   private async persist(): Promise<void> {
@@ -467,6 +570,7 @@ export class GameRoom {
   }
 
   private async scheduleNextAlarm(): Promise<void> {
+    if (this.retiring) return;
     const candidateDueAt = this.engine?.nextDueAt();
     const dueAt =
       typeof candidateDueAt === "number" && Number.isFinite(candidateDueAt)
