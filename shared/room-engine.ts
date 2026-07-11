@@ -930,7 +930,18 @@ export class RoomEngine {
       }
       if (this.state.nextSpawnAt !== null) tasks.push({ at: this.state.nextSpawnAt, priority: 4, kind: "spawn", id: "spawn" });
     }
-    return tasks.sort((left, right) => left.at - right.at || left.priority - right.priority || left.id.localeCompare(right.id))[0] ?? null;
+    return tasks.sort((left, right) => {
+      const timeOrder = left.at - right.at || left.priority - right.priority;
+      if (timeOrder) return timeOrder;
+      if (left.kind === "attack" && right.kind === "attack") {
+        const leftSequence = Number(left.id.slice(left.id.lastIndexOf("-") + 1));
+        const rightSequence = Number(right.id.slice(right.id.lastIndexOf("-") + 1));
+        if (Number.isFinite(leftSequence) && Number.isFinite(rightSequence)) {
+          return leftSequence - rightSequence;
+        }
+      }
+      return left.id.localeCompare(right.id);
+    })[0] ?? null;
   }
 
   private runTask(task: DueTask, events: RoomEvent[]) {
@@ -974,18 +985,29 @@ export class RoomEngine {
       const attack = this.state.pendingAttacks.find((candidate) => candidate.id === task.id);
       if (!attack || attack.resolved || attack.resolveAt !== task.at || this.state.phase !== "playing") return;
       const attacker = this.state.players.find((player) => player.id === attack.attackerId);
-      const targetTeam: Team | null = attacker ? attacker.team === "pine" ? "berry" : "pine" : null;
+      const attackerAlive = Boolean(attacker && attacker.active && attacker.health > 0);
+      const targetTeam: Team | null = attackerAlive && attacker
+        ? attacker.team === "pine" ? "berry" : "pine"
+        : null;
       const target = targetTeam ? this.frontline(targetTeam) : null;
       attack.resolved = true;
       attack.targetId = target?.id ?? null;
       let actualDamage = 0;
-      if (attacker && target) {
+      if (attackerAlive && attacker && target) {
         actualDamage = Math.min(target.health, attack.damage);
         target.health -= actualDamage;
         attacker.damage += actualDamage;
+        if (target.health <= 0) {
+          for (const queuedAttack of this.state.pendingAttacks) {
+            if (
+              !queuedAttack.resolved
+              && queuedAttack.attackerId === target.id
+            ) queuedAttack.resolved = true;
+          }
+        }
       }
       let winner: Team | null = null;
-      if (attacker && target && !this.frontline(target.team)) {
+      if (attackerAlive && attacker && target && !this.frontline(target.team)) {
         winner = attacker.team;
         this.state.phase = "ended";
         this.state.winner = winner;
@@ -998,7 +1020,7 @@ export class RoomEngine {
         targetId: target?.id ?? null,
         actualDamage,
         targetHealth: target?.health ?? null,
-        missed: !target,
+        missed: !attackerAlive || !target,
         winner,
       });
       if (winner) this.emit(events, { type: "match.ended", winner });

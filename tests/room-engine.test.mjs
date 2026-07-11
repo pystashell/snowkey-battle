@@ -224,6 +224,65 @@ test("three words completed quickly create three attacks spaced by 1.85 seconds"
   assert.equal(new Set(attacks.map((attack) => attack.id)).size, 3);
 });
 
+test("knocking out an attacker cancels every queued snowball that has not landed", () => {
+  let engine = createEngine({ words: ["snow", "star", "river", "planet", "cocoa", "winter"] });
+  const guest = join(engine, 1, 10);
+  assert.equal(guest.ok, true);
+  const configured = engine.handleCommand(
+    HOST_SESSION,
+    { op: "lobby.set_config", config: { pineSize: 2, berrySize: 1 } },
+    20,
+  );
+  assert.equal(configured.ok, true);
+  const startedAt = start(engine, ["guest-1"], 100);
+  const availableWords = engine.snapshot(startedAt).words.map((word) => word.text);
+  assert.ok(availableWords.length >= 4);
+
+  typeWord(engine, "guest-1", availableWords[3], startedAt + 1);
+  typeWord(engine, HOST_SESSION, availableWords[0], startedAt + 10);
+  typeWord(engine, HOST_SESSION, availableWords[1], startedAt + 110);
+  typeWord(engine, HOST_SESSION, availableWords[2], startedAt + 210);
+
+  const serialized = engine.serialize();
+  const host = serialized.state.players.find((player) => player.sessionId === HOST_SESSION);
+  assert.ok(host);
+  host.health = 1;
+  engine = RoomEngine.restore(serialized, {
+    random: () => 0.5,
+    wordbooks: { winter: ["snow", "star", "river", "planet", "cocoa", "winter"] },
+  });
+
+  const attacks = engine.serialize().state.pendingAttacks;
+  const hostAttacks = attacks
+    .filter((attack) => attack.attackerId === host.id)
+    .sort((left, right) => left.resolveAt - right.resolveAt);
+  const guestAttack = attacks.find((attack) => attack.attackerId === guest.playerId);
+  assert.equal(hostAttacks.length, 3);
+  assert.ok(guestAttack);
+
+  const guestBeforeKnockout = engine.snapshot(guestAttack.resolveAt).players
+    .find((player) => player.id === guest.playerId);
+  assert.ok(guestBeforeKnockout);
+  const knockout = engine.advance(guestAttack.resolveAt);
+  assert.equal(knockout.events[0]?.type, "attack.resolved");
+  assert.equal(knockout.events[0]?.targetId, host.id);
+  assert.equal(knockout.events[0]?.targetHealth, 0);
+  assert.equal(engine.snapshot(guestAttack.resolveAt).phase, "playing");
+  assert.equal(
+    engine.snapshot(guestAttack.resolveAt).players.find((player) => player.id === guest.playerId)?.health,
+    guestBeforeKnockout.health,
+  );
+  assert.equal(
+    engine.snapshot(guestAttack.resolveAt).players.find((player) => player.id === host.id)?.claims,
+    3,
+  );
+
+  const afterKnockout = engine.serialize().state.pendingAttacks;
+  assert.ok(afterKnockout
+    .filter((attack) => attack.attackerId === host.id)
+    .every((attack) => attack.resolved));
+});
+
 test("damage uses the current frontline, clamps overkill, and advances to the next position", () => {
   let engine = createEngine({ words: ["snow", "star", "river", "planet"] });
   const configured = engine.handleCommand(HOST_SESSION, { op: "lobby.set_config", config: { pineSize: 1, berrySize: 2 } }, 1);

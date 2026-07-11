@@ -98,6 +98,7 @@ type CharacterAction = {
 
 type CatchEffect = {
   id: number;
+  sourcePlayerId: string;
   team: Team;
   text: string;
   fromX: number;
@@ -668,6 +669,7 @@ export default function SnowballGame() {
   const inviteHandledRef = useRef(false);
   const handledRoomEventRef = useRef<RoomEvent | null>(null);
   const onlinePhaseRef = useRef<RoomSnapshot["phase"] | null>(null);
+  const eliminatedPlayerIdsRef = useRef(new Set<string>());
   const isOnline = gameMode === "online" || room.status !== "idle";
   const onlineSnapshot = isOnline ? room.snapshot : null;
   const onlineServerTimeOffsetMs = room.serverTimeOffsetMs;
@@ -747,6 +749,13 @@ export default function SnowballGame() {
       mapRoomPlayer(player, onlineSnapshot.selfPlayerId));
     const mappedWords = onlineSnapshot.words.map((word) =>
       mapRoomWord(word, onlineSnapshot, onlineServerTimeOffsetMs));
+    if (onlineSnapshot.phase === "lobby" || onlineSnapshot.phase === "countdown") {
+      eliminatedPlayerIdsRef.current.clear();
+    }
+    for (const player of mappedPlayers) {
+      if (player.health <= 0) eliminatedPlayerIdsRef.current.add(player.id);
+    }
+    const eliminatedIds = eliminatedPlayerIdsRef.current;
     const selfPlayer = onlineSnapshot.players.find(
       (player) => player.id === onlineSnapshot.selfPlayerId,
     );
@@ -761,6 +770,12 @@ export default function SnowballGame() {
     setPlayers(mappedPlayers);
     wordsRef.current = mappedWords;
     setWords(mappedWords);
+    setProjectiles((current) => current.filter(
+      (projectile) => !eliminatedIds.has(projectile.sourcePlayerId),
+    ));
+    setCatchEffects((current) => current.filter(
+      (effect) => !eliminatedIds.has(effect.sourcePlayerId),
+    ));
     setCharacterActions((current) => Object.fromEntries(
       mappedPlayers.map((player) => [player.id, current[player.id] ?? { phase: "idle", token: 0 }]),
     ) as Record<string, CharacterAction>);
@@ -1035,6 +1050,15 @@ export default function SnowballGame() {
       });
       playersRef.current = next;
       setPlayers(next);
+      if (target.health - actualDamage <= 0) {
+        eliminatedPlayerIdsRef.current.add(target.id);
+        setProjectiles((current) => current.filter(
+          (projectile) => projectile.sourcePlayerId !== target.id,
+        ));
+        setCatchEffects((current) => current.filter(
+          (effect) => effect.sourcePlayerId !== target.id,
+        ));
+      }
       if (target.isUser && target.health - actualDamage <= 0) {
         typedRef.current = "";
         setTyped("");
@@ -1064,8 +1088,9 @@ export default function SnowballGame() {
       const canAnimate = (attacker: Player | undefined) =>
         Boolean(
           attacker
-          && (options?.authoritative || attacker.health > 0)
-          && (options?.authoritative || stageRef.current !== "ended"),
+          && attacker.health > 0
+          && stageRef.current !== "ended"
+          && !eliminatedPlayerIdsRef.current.has(attacker.id),
         );
 
       const sourceFallback = getActorAnchor(player);
@@ -1083,6 +1108,7 @@ export default function SnowballGame() {
         const sourceAnchor = pointInArena(mitten) ?? { x: sourceFallback.x, y: sourceFallback.handY };
         const catchEffect: CatchEffect = {
           id: catchId,
+          sourcePlayerId: player.id,
           team: player.team,
           text: word.text,
           fromX: visibleWord.x,
@@ -1153,6 +1179,15 @@ export default function SnowballGame() {
         scheduleTimer(() => {
           setProjectiles((current) => current.filter((item) => item.id !== projectileId));
           if (!options?.authoritative && stageRef.current === "ended") return;
+          const currentAttacker = playersRef.current.find((candidate) => candidate.id === attacker.id);
+          if (
+            !currentAttacker
+            || currentAttacker.health <= 0
+            || eliminatedPlayerIdsRef.current.has(attacker.id)
+          ) {
+            say(`${word.text} 随着 ${attacker.name} 出局而作废`);
+            return;
+          }
           const currentTarget = playersRef.current.find((candidate) => candidate.id === target.id);
           if (!currentTarget || (!options?.authoritative && currentTarget.health <= 0)) {
             say(`${word.text} 落在了空雪地上`);
@@ -1241,6 +1276,15 @@ export default function SnowballGame() {
       const target = event.targetId
         ? playersRef.current.find((player) => player.id === event.targetId)
         : null;
+      if (target && event.targetHealth === 0) {
+        eliminatedPlayerIdsRef.current.add(target.id);
+        setProjectiles((current) => current.filter(
+          (projectile) => projectile.sourcePlayerId !== target.id,
+        ));
+        setCatchEffects((current) => current.filter(
+          (effect) => effect.sourcePlayerId !== target.id,
+        ));
+      }
       setAnnouncement(
         event.missed || !target
           ? "雪球落在了空雪地上"
@@ -1350,6 +1394,7 @@ export default function SnowballGame() {
     setWords([]);
     setProjectiles([]);
     setCatchEffects([]);
+    eliminatedPlayerIdsRef.current.clear();
     setCharacterActions(createIdleActions());
     actorAvailableAtRef.current = {};
     lockedWordsRef.current.clear();
