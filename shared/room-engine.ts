@@ -20,6 +20,12 @@ import {
   drawWordFromBag,
   wordHistorySize,
 } from "./word-pools.ts";
+import {
+  MAX_WORD_LENGTH,
+  isPlayableWord,
+  normalizePlayableWords,
+  wordSpawnRange,
+} from "./word-rules.ts";
 
 const PROTOCOL_VERSION = 1 as const;
 const MAX_TEAM_SIZE = 4;
@@ -37,7 +43,7 @@ const FROST_FREEZE_MS = 1_000;
 const PLAYER_MAX_HEALTH = 100;
 const WORD_START_Y = 7;
 const WORD_GROUND_TTL_MS = 2_000;
-const WORD_POOL_VERSION = 2;
+const WORD_POOL_VERSION = 3;
 
 type RandomSource = () => number;
 
@@ -224,7 +230,7 @@ function createUniqueAiName(baseName: string, usedNames: Set<string>) {
 }
 
 function sanitizeWords(words: readonly string[]) {
-  return Array.from(new Set(words.map((word) => word.trim().toLowerCase()).filter((word) => /^[a-z]{1,14}$/.test(word))));
+  return normalizePlayableWords(words);
 }
 
 function hasPrefixCollision(candidate: string, activeWords: Set<string>) {
@@ -624,7 +630,7 @@ export class RoomEngine {
     let text = forcedText?.trim().toLowerCase() ?? "";
     let kind: SnowWordKind = forcedText ? forcedKind : "normal";
     if (text) {
-      if (!/^[a-z]{1,14}$/.test(text) || activeTexts.has(text) || hasPrefixCollision(text, activeTexts)) return null;
+      if (!isPlayableWord(text) || activeTexts.has(text) || hasPrefixCollision(text, activeTexts)) return null;
     } else {
       const canSpawnFrost = !this.state.words.some((word) => word.kind === "frost");
       const wantsFrost = forcedKind === "frost" || (canSpawnFrost && this.roll() < FROST_SPAWN_CHANCE);
@@ -645,7 +651,8 @@ export class RoomEngine {
       : null;
     const id = this.state.nextWordId++;
     const restY = 52 + ((id * 11) % 20);
-    const x = 17 + this.roll() * 66;
+    const [minimumX, maximumX] = wordSpawnRange(text.length);
+    const x = minimumX + this.roll() * (maximumX - minimumX);
     const speed = 4 + this.roll() * 2.3;
     const landedAt = calculateWordLandedAt(now, restY, speed);
     const word: RoomWord = {
@@ -997,7 +1004,7 @@ export class RoomEngine {
       this.emit(events, { type: "typing.rejected", playerId: player.id, reason: "TARGET_GONE" });
       return this.success(events);
     }
-    const candidateBuffer = `${typing.buffer}${key}`.slice(0, 14);
+    const candidateBuffer = `${typing.buffer}${key}`.slice(0, MAX_WORD_LENGTH);
     const matches = target
       ? target.text.startsWith(candidateBuffer) ? [target] : []
       : this.state.words.filter((word) => word.text.startsWith(candidateBuffer));

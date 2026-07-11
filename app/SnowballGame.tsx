@@ -31,6 +31,7 @@ import {
   drawWordFromBag,
   wordHistorySize,
 } from "../shared/word-pools";
+import { MAX_WORD_LENGTH, wordSpawnRange } from "../shared/word-rules";
 
 type Team = "pine" | "berry";
 type Stage = "lobby" | "countdown" | "playing" | "paused" | "ended";
@@ -383,6 +384,12 @@ function calculateWordLandedAt(
 function calculateWordY(word: SnowWord, now: number) {
   const elapsedSeconds = Math.max(0, now - word.bornAt) / 1_000;
   return Math.min(word.restY, word.startY + word.speed * elapsedSeconds);
+}
+
+function wordLengthClass(text: string) {
+  if (text.length >= 20) return " is-extra-long";
+  if (text.length >= 15) return " is-long";
+  return "";
 }
 
 function createInitialPlayers(pineCount = 3, berryCount = 3): Player[] {
@@ -1700,11 +1707,12 @@ export default function SnowballGame() {
       const restY = 52 + ((id * 11) % 20);
       const speed = 4 + Math.random() * 2.3;
       const landedAt = calculateWordLandedAt(bornAt, startY, restY, speed);
+      const [minimumX, maximumX] = wordSpawnRange(text.length);
       const word: SnowWord = {
         id,
         text,
         kind,
-        x: 17 + Math.random() * 66,
+        x: minimumX + Math.random() * (maximumX - minimumX),
         startY,
         y: startY,
         restY,
@@ -1970,7 +1978,7 @@ export default function SnowballGame() {
     const availableWords = pruneExpiredWords(Date.now());
     const typingWasPruned = Boolean(typedBeforePrune && !typedRef.current);
     const previousTyped = typedRef.current;
-    const inputValue = event.target.value.toLowerCase().replace(/[^a-z]/g, "").slice(0, 14);
+    const inputValue = event.target.value.toLowerCase().replace(/[^a-z]/g, "").slice(0, MAX_WORD_LENGTH);
     const nextValue = typingWasPruned ? inputValue.slice(-1) : inputValue;
     if (!nextValue) {
       typedRef.current = "";
@@ -2018,7 +2026,7 @@ export default function SnowballGame() {
       const key = event.key.toLowerCase();
       const availableWords = pruneExpiredWords(Date.now());
       room.sendCommand({ op: "type.key", key });
-      const nextValue = `${typedRef.current}${key}`.slice(0, 14);
+      const nextValue = `${typedRef.current}${key}`.slice(0, MAX_WORD_LENGTH);
       const target = targetWordIdRef.current === null
         ? null
         : availableWords.find((word) => word.id === targetWordIdRef.current) ?? null;
@@ -2478,7 +2486,7 @@ export default function SnowballGame() {
                       if (node) wordNodesRef.current.set(word.id, node);
                       else wordNodesRef.current.delete(word.id);
                     }}
-                    className={`snow-word snow-word--${word.aiTeam} is-${raceState}${word.kind === "frost" ? " is-frost" : ""}${focusedWordId === word.id ? " is-focused" : ""}${isResting ? " is-resting" : ""}${isMelting ? " is-melting" : ""}`}
+                    className={`snow-word snow-word--${word.aiTeam} is-${raceState}${word.kind === "frost" ? " is-frost" : ""}${wordLengthClass(word.text)}${focusedWordId === word.id ? " is-focused" : ""}${isResting ? " is-resting" : ""}${isMelting ? " is-melting" : ""}`}
                     aria-label={word.kind === "frost"
                       ? text(
                         `超级雪花单词 ${word.text}，命中对方全体 15 点并冻住 1 秒`,
@@ -2519,7 +2527,7 @@ export default function SnowballGame() {
             {catchEffects.map((effect) => (
               <div
                 key={effect.id}
-                className={`catch-effect catch-effect--${effect.team}${effect.kind === "frost" ? " is-frost" : ""}`}
+                className={`catch-effect catch-effect--${effect.team}${effect.kind === "frost" ? " is-frost" : ""}${wordLengthClass(effect.text)}`}
                 style={
                   {
                     "--catch-from-x": `${effect.fromX}%`,
@@ -2616,6 +2624,7 @@ export default function SnowballGame() {
                 <input
                   ref={inputRef}
                   value={typed}
+                  maxLength={MAX_WORD_LENGTH}
                   onChange={handleInput}
                   onKeyDown={handleInputKeyDown}
                   disabled={stage !== "playing" || !userAlive || userFrozen || (isOnline && !room.connected)}

@@ -1,3 +1,10 @@
+import {
+  ECDICT_CET4_WORDS,
+  ECDICT_CET6_WORDS,
+  ECDICT_POSTGRADUATE_WORDS,
+} from "./wordbooks-data/exam-wordbooks.ts";
+import { normalizePlayableWords } from "../shared/word-rules.ts";
+
 export type WordbookId =
   | "winter"
   | "cet4"
@@ -21,13 +28,7 @@ export type Wordbook = {
 };
 
 function normalizeWords(words: readonly string[]) {
-  return Array.from(
-    new Set(
-      words
-        .map((word) => word.trim().toLowerCase())
-        .filter((word) => /^[a-z]{2,14}$/.test(word)),
-    ),
-  );
+  return normalizePlayableWords(words);
 }
 
 const winterWords = normalizeWords([
@@ -41,6 +42,30 @@ const winterWords = normalizeWords([
   "pocket", "hood", "shelter", "footprint", "freezing", "slippery", "windy", "cozy", "thermos",
   "campfire", "sunrise", "iceberg", "snowfall", "firewood", "sweater", "beanie", "skating",
 ]);
+
+// These extra-long entries come from ECDICT's general dictionary rather than its
+// exam tags. They are deliberately separated so the UI can describe them honestly
+// as game challenge additions, not as official CET or postgraduate syllabus words.
+const cet4LongChallengeWords = [
+  "telecommunications", "characteristically", "disproportionately", "institutionalization",
+  "uncharacteristically", "counterintelligence", "internationalization", "oversimplification",
+  "interconnectedness", "professionalization", "underrepresentation", "neuropsychological",
+] as const;
+
+const cet6LongChallengeWords = [
+  "gastroenterologist", "representativeness", "disenfranchisement", "chlorofluorocarbon",
+  "overrepresentation", "neurophysiological", "unconstitutionally", "reconceptualization",
+  "immunofluorescence", "interdenominational", "deindustrialization", "operationalization",
+  "compartmentalization",
+] as const;
+
+const postgraduateLongChallengeWords = [
+  "phosphatidylcholine", "cholangiopancreatography", "incommensurability", "transubstantiation",
+  "psychophysiological", "disproportionality", "incomprehensibility", "paleoanthropologist",
+  "psychopharmacology", "straightforwardness", "psychopathological", "interorganizational",
+  "interchangeability", "electroencephalogram", "electrophysiological",
+  "psychopharmacological", "dehydroepiandrosterone",
+] as const;
 
 const cet4Words = normalizeWords([
   "ability", "academic", "access", "achieve", "adapt", "advance", "affect", "analyze", "approach",
@@ -56,9 +81,11 @@ const cet4Words = normalizeWords([
   "society", "specific", "strategy", "structure", "support", "technology", "theory", "tradition",
   "transport", "variety", "volunteer", "welfare", "attitude", "balance", "capacity", "communication",
   "competition", "creative", "efficient", "frequent", "independent", "responsible", "solution",
+  ...ECDICT_CET4_WORDS,
+  ...cet4LongChallengeWords,
 ]);
 
-// 按六级常见的学术、社会与论证场景自主精选，不对应或复制任何官方词表。
+// ECDICT 的考试标签词汇加上原有游戏精选词；并非官方考试大纲原文。
 const cet6Words = normalizeWords([
   "abstract", "abundant", "accelerate", "accommodate", "accumulate", "acknowledge", "adequate",
   "advocate", "allocate", "alter", "ambiguous", "anticipate", "apparent", "articulate", "assess",
@@ -76,9 +103,11 @@ const cet6Words = normalizeWords([
   "priority", "prohibit", "prospect", "reinforce", "reject", "relevant", "reluctant", "resolve",
   "retain", "reveal", "rigorous", "sector", "simulate", "stable", "substitute", "sustain",
   "transform", "transmit", "valid", "violate", "virtual",
+  ...ECDICT_CET6_WORDS,
+  ...cet6LongChallengeWords,
 ]);
 
-// 围绕研究阅读、抽象论证与人文社科语境自主精选，不对应或复制任何教材词表。
+// ECDICT 的考研标签词汇加上原有游戏精选词；并非特定教材原文。
 const postgraduateWords = normalizeWords([
   "abstraction", "accountability", "adjacent", "adversity", "aesthetic", "analogy", "anomaly",
   "arbitrary", "architecture", "ascertain", "assimilate", "autonomy", "bureaucracy", "categorical",
@@ -94,6 +123,8 @@ const postgraduateWords = normalizeWords([
   "refine", "resilient", "rhetoric", "scholarship", "skeptical", "socioeconomic", "sovereignty",
   "spectrum", "structural", "subordinate", "successive", "synthesis", "systematic", "tentative",
   "theoretical", "threshold", "trajectory", "transcend", "undermine", "validity", "variable", "vulnerable",
+  ...ECDICT_POSTGRADUATE_WORDS,
+  ...postgraduateLongChallengeWords,
 ]);
 
 const conceptStarterWords = normalizeWords([
@@ -146,38 +177,38 @@ export const WORD_BOOKS: Record<WordbookId, Wordbook> = {
   },
   cet4: {
     id: "cet4",
-    label: "大学四级 · 常用精选",
-    labelEn: "CET-4 · Core Selection",
-    shortLabel: "四级精选",
+    label: "大学四级 · 3,800+ 词",
+    labelEn: "CET-4 · 3,800+ Words",
+    shortLabel: "四级词库",
     shortLabelEn: "CET-4",
-    description: "校园、社会与学术场景中的常用词，整体长度和难度更高。",
-    descriptionEn: "Common campus, social, and academic vocabulary with moderately longer words.",
-    sourceNote: "自主整理，非官方考试词表",
-    sourceNoteEn: "Independent selection, not an official exam list",
+    description: "覆盖 3,800+ 个四级标签词，并加入一组游戏长词挑战，重复率大幅降低。",
+    descriptionEn: "Over 3,800 CET-4-tagged words plus a game-only long-word challenge set for far fewer repeats.",
+    sourceNote: "ECDICT（MIT）考试标签数据 + 游戏长词挑战补充；非官方考试大纲",
+    sourceNoteEn: "ECDICT exam-tag data (MIT) + game-only long-word additions; not an official syllabus",
     words: cet4Words,
   },
   cet6: {
     id: "cet6",
-    label: "大学六级 · 进阶精选",
-    labelEn: "CET-6 · Advanced Selection",
-    shortLabel: "六级精选",
+    label: "大学六级 · 5,300+ 词",
+    labelEn: "CET-6 · 5,300+ Words",
+    shortLabel: "六级词库",
     shortLabelEn: "CET-6",
-    description: "偏重学术阅读、社会议题与抽象表达，长词更多，适合进阶打字挑战。",
-    descriptionEn: "Academic reading, social topics, and abstract expression with more long words.",
-    sourceNote: "自主精选，非官方考试词表",
-    sourceNoteEn: "Independent selection, not an official exam list",
+    description: "覆盖 5,300+ 个六级标签词，并加入 18–20 字母的游戏长词挑战。",
+    descriptionEn: "Over 5,300 CET-6-tagged words plus game-only 18–20 letter challenge words.",
+    sourceNote: "ECDICT（MIT）考试标签数据 + 游戏长词挑战补充；非官方考试大纲",
+    sourceNoteEn: "ECDICT exam-tag data (MIT) + game-only long-word additions; not an official syllabus",
     words: cet6Words,
   },
   postgraduate: {
     id: "postgraduate",
-    label: "考研英语 · 阅读精选",
-    labelEn: "Postgraduate English · Reading",
-    shortLabel: "考研精选",
+    label: "考研英语 · 4,800+ 词",
+    labelEn: "Postgraduate English · 4,800+ Words",
+    shortLabel: "考研词库",
     shortLabelEn: "Postgraduate",
-    description: "覆盖研究阅读、人文社科与复杂论证语境，整体难度和长词比例最高。",
-    descriptionEn: "Research reading, humanities, social sciences, and complex argumentation with the highest difficulty.",
-    sourceNote: "自主精选，不复制特定教材词表",
-    sourceNoteEn: "Independent selection, not copied from a textbook",
+    description: "覆盖 4,800+ 个考研标签词，并加入最高 24 字母的游戏长词挑战。",
+    descriptionEn: "Over 4,800 postgraduate-exam-tagged words plus game-only challenges up to 24 letters.",
+    sourceNote: "ECDICT（MIT）考试标签数据 + 游戏长词挑战补充；非官方大纲或特定教材",
+    sourceNoteEn: "ECDICT exam-tag data (MIT) + game-only long-word additions; not an official syllabus or textbook",
     words: postgraduateWords,
   },
   conceptStarter: {

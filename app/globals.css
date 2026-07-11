@@ -3594,6 +3594,18 @@ select:focus-visible {
   text-underline-offset: 4px;
 }
 
+.snow-word.is-long .snow-word__sway > strong {
+  padding-inline: 8px;
+  font-size: clamp(12px, 1vw, 15px);
+  letter-spacing: 0;
+}
+
+.snow-word.is-extra-long .snow-word__sway > strong {
+  padding-inline: 7px;
+  font-size: clamp(10px, 0.82vw, 13px);
+  letter-spacing: -0.01em;
+}
+
 .snow-word__sway > i {
   position: absolute;
   z-index: 3;
@@ -3681,6 +3693,9 @@ select:focus-visible {
   font-family: var(--font-mono);
   font-size: 13px;
 }
+
+.catch-effect.is-long > strong { font-size: 11px; letter-spacing: -0.01em; }
+.catch-effect.is-extra-long > strong { font-size: 9px; letter-spacing: -0.02em; }
 
 .catch-effect > i {
   position: absolute;
@@ -3817,6 +3832,18 @@ select:focus-visible {
   background: linear-gradient(135deg, rgba(245, 255, 255, 0.98), rgba(191, 244, 255, 0.98));
   box-shadow: 0 0 0 5px rgba(126, 236, 255, 0.3), 0 5px 0 rgba(38, 58, 133, 0.28);
   font-size: clamp(17px, 1.45vw, 22px);
+}
+
+.snow-word.is-frost.is-long .snow-word__sway > strong {
+  padding-inline: 9px;
+  font-size: clamp(13px, 1.05vw, 16px);
+  letter-spacing: 0;
+}
+
+.snow-word.is-frost.is-extra-long .snow-word__sway > strong {
+  padding-inline: 7px;
+  font-size: clamp(11px, 0.88vw, 14px);
+  letter-spacing: -0.015em;
 }
 
 .snow-word__power {
@@ -4010,6 +4037,10 @@ select:focus-visible {
   .snow-word__sway { min-width: 72px; height: 45px; }
   .snow-word__flake { font-size: 43px; }
   .snow-word__sway > strong { min-width: 57px; padding: 6px 8px; font-size: 13px; }
+  .snow-word.is-long .snow-word__sway > strong,
+  .snow-word.is-frost.is-long .snow-word__sway > strong { padding-inline: 6px; font-size: 10px; }
+  .snow-word.is-extra-long .snow-word__sway > strong,
+  .snow-word.is-frost.is-extra-long .snow-word__sway > strong { padding-inline: 5px; font-size: 8px; }
   .projectile { width: 45px; height: 45px; }
 }
 

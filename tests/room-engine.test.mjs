@@ -8,6 +8,7 @@ import {
   calculateWordDamage,
 } from "../shared/room-engine.ts";
 import { buildWordPools } from "../shared/word-pools.ts";
+import { MAX_WORD_LENGTH } from "../shared/word-rules.ts";
 
 const CODE = "ABC234";
 const HOST_SESSION = "host-session";
@@ -344,6 +345,36 @@ test("prefix matching stays ambiguous, locks at one candidate, and rejects a bad
 
   engine.handleCommand(HOST_SESSION, { op: "type.cancel" }, startedAt + 4);
   assert.deepEqual(engine.snapshot(startedAt + 4).typingByPlayer["pine-0"], { buffer: "", targetWordId: null });
+});
+
+test("a 24-letter word can fall and be typed, while a 25-letter word is rejected", () => {
+  const longestPlayableWord = "disestablishmentarianism";
+  const overLimitWord = "antidisestablishmentarian";
+  assert.equal(longestPlayableWord.length, MAX_WORD_LENGTH);
+  assert.equal(overLimitWord.length, MAX_WORD_LENGTH + 1);
+
+  const words = [longestPlayableWord, "snow", "star", "river", "planet"];
+  let engine = createEngine({ words });
+  const startedAt = start(engine);
+  const serialized = engine.serialize();
+  serialized.state.words = [];
+  serialized.state.nextSpawnAt = null;
+  serialized.state.deferredEvents = [];
+  engine = RoomEngine.restore(serialized, {
+    random: () => 0.5,
+    wordbooks: { winter: words },
+  });
+
+  const spawned = engine.spawnWord(startedAt + 1, longestPlayableWord, "normal");
+  assert.ok(spawned);
+  assert.equal(spawned.text, longestPlayableWord);
+  assert.ok(spawned.x >= 30 && spawned.x <= 70);
+  assert.equal(engine.spawnWord(startedAt + 2, overLimitWord, "normal"), null);
+
+  const claim = typeWord(engine, HOST_SESSION, longestPlayableWord, startedAt + 3);
+  assert.equal(claim.events[0]?.type, "word.claimed");
+  assert.equal(claim.events[0]?.word.text, longestPlayableWord);
+  assert.equal(claim.events[0]?.damage, 13);
 });
 
 test("each match starts with one visible frost word and never keeps two frost words on the field", () => {
@@ -838,7 +869,7 @@ test("match-ending attack emits at most one event per advance and defers match.e
 });
 
 test("damage and AI timing helpers preserve the existing game balance", () => {
-  assert.deepEqual([1, 5, 6, 8, 9, 11, 12, 14].map(calculateWordDamage), [10, 10, 11, 11, 12, 12, 13, 13]);
+  assert.deepEqual([1, 5, 6, 8, 9, 11, 12, 14, 24].map(calculateWordDamage), [10, 10, 11, 11, 12, 12, 13, 13, 13]);
 
   const midpoint = () => 0.5;
   const rookie = calculateAiTiming("rookie", "winter", 1_000, midpoint);

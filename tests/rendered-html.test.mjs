@@ -42,9 +42,9 @@ test("server-renders the Chinese snow fighting game for a Chinese browser", asyn
   assert.match(html, /aria-label="雪松队人数"/);
   assert.match(html, /aria-label="红莓队人数"/);
   assert.match(html, /aria-label="选择单词册"/);
-  assert.match(html, /大学四级 · 常用精选/);
-  assert.match(html, /大学六级 · 进阶精选/);
-  assert.match(html, /考研英语 · 阅读精选/);
+  assert.match(html, /大学四级 · 3,800\+ 词/);
+  assert.match(html, /大学六级 · 5,300\+ 词/);
+  assert.match(html, /考研英语 · 4,800\+ 词/);
   assert.match(html, /经典情景英语 · 入门/);
   assert.match(html, /aria-label="选择雪花密度"/);
   assert.match(html, /普通伤害 10 \/ 11 \/ 12 \/ 13 · 最长 10 词轮换超级雪花 · 全体命中 15 \+ 冻住 1 秒/);
@@ -67,7 +67,9 @@ test("server-renders the complete English lobby for a non-Chinese browser", asyn
   assert.match(html, /Online with Friends/);
   assert.match(html, /Start with This Formation/);
   assert.match(html, /Pine team size/);
-  assert.match(html, /CET-6 · Advanced Selection/);
+  assert.match(html, /CET-4 · 3,800\+ Words/);
+  assert.match(html, /CET-6 · 5,300\+ Words/);
+  assert.match(html, /Postgraduate English · 4,800\+ Words/);
   assert.match(html, /The 10 longest words rotate as Super Snowflakes · Hit all opponents for 15 \+ freeze for 1 second/);
   assert.doesNotMatch(html, /giant frost snowflake|frost words/i);
   assert.match(html, /Words melt 2 seconds after landing/);
