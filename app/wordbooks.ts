@@ -177,8 +177,8 @@ export const WORD_BOOKS: Record<WordbookId, Wordbook> = {
   },
   cet4: {
     id: "cet4",
-    label: "大学四级 · 3,800+ 词",
-    labelEn: "CET-4 · 3,800+ Words",
+    label: "大学四级 · 大型词库",
+    labelEn: "CET-4 · Large Wordbook",
     shortLabel: "四级词库",
     shortLabelEn: "CET-4",
     description: "覆盖 3,800+ 个四级标签词，并加入一组游戏长词挑战，重复率大幅降低。",
@@ -189,8 +189,8 @@ export const WORD_BOOKS: Record<WordbookId, Wordbook> = {
   },
   cet6: {
     id: "cet6",
-    label: "大学六级 · 5,300+ 词",
-    labelEn: "CET-6 · 5,300+ Words",
+    label: "大学六级 · 大型词库",
+    labelEn: "CET-6 · Large Wordbook",
     shortLabel: "六级词库",
     shortLabelEn: "CET-6",
     description: "覆盖 5,300+ 个六级标签词，并加入 18–20 字母的游戏长词挑战。",
@@ -201,8 +201,8 @@ export const WORD_BOOKS: Record<WordbookId, Wordbook> = {
   },
   postgraduate: {
     id: "postgraduate",
-    label: "考研英语 · 4,800+ 词",
-    labelEn: "Postgraduate English · 4,800+ Words",
+    label: "考研英语 · 大型词库",
+    labelEn: "Postgraduate English · Large Wordbook",
     shortLabel: "考研词库",
     shortLabelEn: "Postgraduate",
     description: "覆盖 4,800+ 个考研标签词，并加入最高 24 字母的游戏长词挑战。",
