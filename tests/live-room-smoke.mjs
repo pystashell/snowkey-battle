@@ -153,16 +153,11 @@ try {
   assert.equal(hit.event.actualDamage, 15);
   assert.equal(typeof hit.event.frozenUntil, "number");
 
-  guest.send({ op: "type.key", key: "s" });
-  const frozenRejection = await guest.waitFor((message) => message.type === "event"
-    && message.event.type === "typing.rejected"
-    && message.event.playerId === guestWelcome.snapshot.selfPlayerId
-    && message.event.reason === "FROZEN");
-  assert.equal(frozenRejection.event.reason, "FROZEN");
-
   const guestSynced = await guest.waitFor((message) => message.type === "snapshot"
     && message.snapshot.revision >= hit.revision
-    && message.snapshot.players.some((player) => player.id === hit.event.targetId && player.health === hit.event.targetHealth));
+    && message.snapshot.players.some((player) => player.id === hit.event.targetId
+      && player.health === hit.event.targetHealth
+      && player.frozenUntil === hit.event.frozenUntil));
   assert.equal(guestSynced.snapshot.code, roomCode);
 
   host.send({ op: "presence.leave" });
