@@ -145,6 +145,10 @@ export class GameRoom {
   async fetch(request: Request): Promise<Response> {
     const url = new URL(request.url);
 
+    if (request.method === "GET" && url.pathname === "/internal/health") {
+      return jsonResponse({ ok: true, service: "game-room" });
+    }
+
     if (request.method === "POST" && url.pathname === "/internal/init") {
       return this.initialize(request);
     }

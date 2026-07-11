@@ -123,6 +123,14 @@ const worker = {
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     const url = new URL(request.url);
 
+    if (url.pathname === "/api/rooms/health") {
+      if (request.method !== "GET") {
+        return new Response(null, { status: 405, headers: { Allow: "GET" } });
+      }
+      const room = env.GAME_ROOMS.getByName("room-health-check");
+      return room.fetch(new Request(new URL("/internal/health", request.url)));
+    }
+
     if (url.pathname === "/api/rooms") {
       if (request.method !== "POST") {
         return new Response(null, { status: 405, headers: { Allow: "POST" } });
