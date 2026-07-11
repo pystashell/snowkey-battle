@@ -251,6 +251,126 @@ test("prefix matching stays ambiguous, locks at one candidate, and rejects a bad
   assert.deepEqual(engine.snapshot(startedAt + 4).typingByPlayer["pine-0"], { buffer: "", targetWordId: null });
 });
 
+test("each match starts with one visible frost word and never keeps two frost words on the field", () => {
+  const engine = createEngine({
+    words: ["snow", "river", "planet", "accountability", "counterpoint"],
+  });
+  const startedAt = start(engine);
+  let snapshot = engine.snapshot(startedAt);
+  const frostWords = snapshot.words.filter((word) => word.kind === "frost");
+  assert.equal(frostWords.length, 1);
+  assert.ok(frostWords[0].text.length >= ROOM_ENGINE_CONSTANTS.frostWordMinLength);
+
+  engine.spawnWord(startedAt + 1);
+  engine.spawnWord(startedAt + 2);
+  snapshot = engine.snapshot(startedAt + 2);
+  assert.equal(snapshot.words.filter((word) => word.kind === "frost").length, 1);
+});
+
+test("a frost word deals 15 damage and freezes the surviving frontline for exactly one second", () => {
+  const engine = createEngine({
+    words: ["snow", "river", "planet", "accountability", "counterpoint"],
+  });
+  const guest = join(engine, 1, 10);
+  assert.equal(guest.ok, true);
+  const configured = engine.handleCommand(
+    HOST_SESSION,
+    { op: "lobby.set_config", config: { pineSize: 1, berrySize: 1 } },
+    11,
+  );
+  assert.equal(configured.ok, true);
+  const startedAt = start(engine, ["guest-1"], 100);
+  const frostWord = engine.snapshot(startedAt).words.find((word) => word.kind === "frost");
+  assert.ok(frostWord);
+
+  const claim = typeWord(engine, HOST_SESSION, frostWord.text, startedAt + 1);
+  assert.equal(claim.events[0]?.type, "word.claimed");
+  assert.equal(claim.events[0]?.damage, ROOM_ENGINE_CONSTANTS.frostDamage);
+  const resolveAt = claim.events[0].resolveAt;
+  const resolved = engine.advance(resolveAt);
+  assert.equal(resolved.events[0]?.type, "attack.resolved");
+  assert.equal(resolved.events[0]?.actualDamage, ROOM_ENGINE_CONSTANTS.frostDamage);
+  assert.equal(resolved.events[0]?.frozenUntil, resolveAt + ROOM_ENGINE_CONSTANTS.frostFreezeMs);
+  assert.equal(engine.snapshot(resolveAt).players.find((player) => player.id === guest.playerId)?.frozenUntil,
+    resolveAt + ROOM_ENGINE_CONSTANTS.frostFreezeMs);
+
+  const blocked = engine.handleCommand("guest-1", { op: "type.key", key: "s" }, resolveAt + 999);
+  assert.equal(blocked.ok, true);
+  assert.deepEqual(blocked.events[0], { type: "typing.rejected", playerId: guest.playerId, reason: "FROZEN" });
+
+  const thawedAt = resolveAt + ROOM_ENGINE_CONSTANTS.frostFreezeMs;
+  const allowed = engine.handleCommand("guest-1", { op: "type.key", key: "s" }, thawedAt);
+  assert.equal(allowed.ok, true);
+  assert.notEqual(allowed.events[0]?.type === "typing.rejected" ? allowed.events[0].reason : null, "FROZEN");
+});
+
+test("freezing an AI delays its current word claim by the freeze duration", () => {
+  const engine = createEngine({
+    words: ["snow", "river", "planet", "accountability", "counterpoint"],
+  });
+  const configured = engine.handleCommand(
+    HOST_SESSION,
+    { op: "lobby.set_config", config: { pineSize: 1, berrySize: 1 } },
+    10,
+  );
+  assert.equal(configured.ok, true);
+  const startedAt = start(engine, [], 100);
+  const initial = engine.snapshot(startedAt);
+  const frostWord = initial.words.find((word) => word.kind === "frost");
+  const normalWord = initial.words.find((word) => word.kind === "normal" && word.aiPlayerId === "berry-0");
+  assert.ok(frostWord);
+  assert.ok(normalWord);
+  assert.equal(typeof normalWord.aiClaimAt, "number");
+
+  const claim = typeWord(engine, HOST_SESSION, frostWord.text, startedAt + 1);
+  assert.equal(claim.events[0]?.type, "word.claimed");
+  engine.advance(claim.events[0].resolveAt);
+  const delayed = engine.snapshot(claim.events[0].resolveAt).words.find((word) => word.id === normalWord.id);
+  assert.equal(delayed?.aiClaimAt, normalWord.aiClaimAt + ROOM_ENGINE_CONSTANTS.frostFreezeMs);
+
+  engine.advance(normalWord.aiClaimAt);
+  assert.ok(engine.snapshot(normalWord.aiClaimAt).words.some((word) => word.id === normalWord.id));
+});
+
+test("all due impacts resolve before a same-time input command can slip past a later frost hit", () => {
+  const engine = createEngine();
+  const configured = engine.handleCommand(
+    HOST_SESSION,
+    { op: "lobby.set_config", config: { pineSize: 2, berrySize: 1 } },
+    1,
+  );
+  assert.equal(configured.ok, true);
+  const pineGuest = join(engine, 1, 2);
+  assert.equal(pineGuest.ok, true);
+  const switched = engine.handleCommand("guest-1", { op: "lobby.set_team", team: "pine" }, 3);
+  assert.equal(switched.ok, true);
+  const berryGuest = join(engine, 2, 4);
+  assert.equal(berryGuest.ok, true);
+
+  const startedAt = start(engine, ["guest-1", "guest-2"], 100);
+  const normal = engine.spawnWord(startedAt + 1, "lamp", "normal");
+  const frost = engine.spawnWord(startedAt + 1, "counterpoint", "frost");
+  assert.ok(normal);
+  assert.ok(frost);
+  const normalClaim = typeWord(engine, HOST_SESSION, normal.text, startedAt + 2);
+  const frostClaim = typeWord(engine, "guest-1", frost.text, startedAt + 2);
+  assert.equal(normalClaim.events[0]?.type, "word.claimed");
+  assert.equal(frostClaim.events[0]?.type, "word.claimed");
+  assert.equal(normalClaim.events[0].resolveAt, frostClaim.events[0].resolveAt);
+
+  const impactAt = normalClaim.events[0].resolveAt;
+  const attempted = engine.handleCommand("guest-2", { op: "type.key", key: "s" }, impactAt);
+  assert.equal(attempted.ok, true);
+  const target = engine.snapshot(impactAt, "guest-2").players.find((player) => player.id === berryGuest.playerId);
+  assert.ok(target);
+  assert.equal(target?.health, target.maxHealth - 10 - ROOM_ENGINE_CONSTANTS.frostDamage);
+  assert.equal(target?.frozenUntil, impactAt + ROOM_ENGINE_CONSTANTS.frostFreezeMs);
+  assert.deepEqual(engine.snapshot(impactAt, "guest-2").typingByPlayer[berryGuest.playerId], {
+    buffer: "",
+    targetWordId: null,
+  });
+});
+
 test("two humans racing the same word produce exactly one claim and one attack", () => {
   const engine = createEngine({ words: ["snow", "star", "river"] });
   const guest = join(engine, 1, 10);

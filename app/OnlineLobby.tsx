@@ -303,6 +303,7 @@ export function OnlineLobby(props: OnlineLobbyProps) {
               <li><b>1</b><span>创建房间并复制邀请链接</span></li>
               <li><b>2</b><span>好友输入 6 位码加入，两队可不对称</span></li>
               <li><b>3</b><span>大家打同一批词，最快者抢到雪球</span></li>
+              <li><b>✦</b><span>发光长难词是冰晶雪球：15 伤害并冻结前排 1 秒</span></li>
             </ol>
             <small>浏览器切后台不会暂停整间房；重新打开会自动尝试恢复席位。</small>
           </div>
@@ -347,7 +348,7 @@ export function OnlineLobby(props: OnlineLobbyProps) {
             <div className="room-card__footer">
               <span>🔒 服务端裁判</span>
               <span>↻ 断线重连</span>
-              <span>⌨ 逐键竞速</span>
+              <span>⚙ 职业管血量，难度管 AI 速度</span>
             </div>
           </div>
         )}

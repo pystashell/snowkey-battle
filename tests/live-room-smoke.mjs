@@ -119,8 +119,16 @@ try {
     && message.snapshot.players.find((player) => player.id === guestWelcome.snapshot.selfPlayerId)?.position === 0
     && message.snapshot.revision > guestMoved.snapshot.revision);
 
-  host.send({ op: "lobby.set_config", config: { pineSize: 1, berrySize: 1, snowfallLevel: "light" } });
-  await host.waitFor((message) => message.type === "snapshot" && message.snapshot.config.pineSize === 1 && message.snapshot.config.berrySize === 1);
+  host.send({ op: "lobby.set_config", config: {
+    pineSize: 1,
+    berrySize: 1,
+    snowfallLevel: "light",
+    wordbookId: "postgraduate",
+  } });
+  await host.waitFor((message) => message.type === "snapshot"
+    && message.snapshot.config.pineSize === 1
+    && message.snapshot.config.berrySize === 1
+    && message.snapshot.config.wordbookId === "postgraduate");
 
   host.send({ op: "presence.ready", ready: true });
   guest.send({ op: "presence.ready", ready: true });
@@ -131,7 +139,8 @@ try {
   host.send({ op: "match.start" });
   const playing = await host.waitFor((message) => message.type === "snapshot" && message.snapshot.phase === "playing", 20_000);
   assert.ok(playing.snapshot.words.length > 0);
-  const word = playing.snapshot.words[0];
+  const word = playing.snapshot.words.find((candidate) => candidate.kind === "frost");
+  assert.ok(word);
   for (const key of word.text) host.send({ op: "type.key", key });
 
   const claim = await host.waitFor((message) => message.type === "event"
@@ -141,7 +150,15 @@ try {
   const hit = await host.waitFor((message) => message.type === "event"
     && message.event.type === "attack.resolved"
     && message.event.attackId === claim.event.attackId);
-  assert.ok(hit.event.actualDamage >= 10 && hit.event.actualDamage <= 15);
+  assert.equal(hit.event.actualDamage, 15);
+  assert.equal(typeof hit.event.frozenUntil, "number");
+
+  guest.send({ op: "type.key", key: "s" });
+  const frozenRejection = await guest.waitFor((message) => message.type === "event"
+    && message.event.type === "typing.rejected"
+    && message.event.playerId === guestWelcome.snapshot.selfPlayerId
+    && message.event.reason === "FROZEN");
+  assert.equal(frozenRejection.event.reason, "FROZEN");
 
   const guestSynced = await guest.waitFor((message) => message.type === "snapshot"
     && message.snapshot.revision >= hit.revision
@@ -157,6 +174,7 @@ try {
     guestPlayerId: guestWelcome.snapshot.selfPlayerId,
     claimedWord: word.text,
     damage: hit.event.actualDamage,
+    frozeGuestForOneSecond: true,
     guestMovedOwnSeat: true,
     synchronizedRevision: guestSynced.snapshot.revision,
   }, null, 2));

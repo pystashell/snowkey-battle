@@ -4,7 +4,15 @@ export type Team = "pine" | "berry";
 export type AiLevel = "rookie" | "steady" | "expert";
 export type PlayerRole = "tank" | "balanced" | "striker";
 export type SnowfallLevel = "light" | "classic" | "blizzard";
-export type WordbookId = "winter" | "cet4" | "conceptStarter" | "conceptProgress" | "mixed";
+export type SnowWordKind = "normal" | "frost";
+export type WordbookId =
+  | "winter"
+  | "cet4"
+  | "cet6"
+  | "postgraduate"
+  | "conceptStarter"
+  | "conceptProgress"
+  | "mixed";
 export type RoomPhase = "lobby" | "countdown" | "playing" | "ended";
 
 export type RoomConfig = {
@@ -31,6 +39,7 @@ export type RoomPlayer = {
   damage: number;
   combo: number;
   bestCombo: number;
+  frozenUntil: number;
   controller: PublicController;
 };
 
@@ -42,6 +51,7 @@ export type RoomTypingState = {
 export type RoomWord = {
   id: number;
   text: string;
+  kind: SnowWordKind;
   x: number;
   restY: number;
   speed: number;
@@ -58,6 +68,7 @@ export type PendingAttack = {
   attackerId: string;
   targetId: string | null;
   word: string;
+  kind: SnowWordKind;
   damage: number;
   startsAt: number;
   throwAt: number;
@@ -104,12 +115,13 @@ export type RoomEvent =
       targetId: string | null;
       actualDamage: number;
       targetHealth: number | null;
+      frozenUntil: number | null;
       missed: boolean;
       winner: Team | null;
     }
   | { type: "match.started"; startedAt: number }
   | { type: "match.ended"; winner: Team }
-  | { type: "typing.rejected"; playerId: string; reason: "NO_MATCH" | "TARGET_GONE" }
+  | { type: "typing.rejected"; playerId: string; reason: "NO_MATCH" | "TARGET_GONE" | "FROZEN" }
   | { type: "player.replaced_by_ai"; playerId: string };
 
 export type JoinMessage = {

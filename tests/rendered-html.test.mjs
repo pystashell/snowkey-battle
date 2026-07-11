@@ -39,9 +39,11 @@ test("server-renders the snow fighting game", async () => {
   assert.match(html, /aria-label="红莓队人数"/);
   assert.match(html, /aria-label="选择单词册"/);
   assert.match(html, /大学四级 · 常用精选/);
+  assert.match(html, /大学六级 · 进阶精选/);
+  assert.match(html, /考研英语 · 阅读精选/);
   assert.match(html, /经典情景英语 · 入门/);
   assert.match(html, /aria-label="选择雪花密度"/);
-  assert.match(html, /伤害 10 \/ 11 \/ 12 \/ 13/);
+  assert.match(html, /普通伤害 10 \/ 11 \/ 12 \/ 13 · 冰晶 15 \+ 冻结 1 秒/);
   assert.match(html, /永远攻击最前排/);
   assert.doesNotMatch(html, /codex-preview|react-loading-skeleton|Your site is taking shape/i);
 });

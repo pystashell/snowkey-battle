@@ -1,4 +1,11 @@
-export type WordbookId = "winter" | "cet4" | "conceptStarter" | "conceptProgress" | "mixed";
+export type WordbookId =
+  | "winter"
+  | "cet4"
+  | "cet6"
+  | "postgraduate"
+  | "conceptStarter"
+  | "conceptProgress"
+  | "mixed";
 
 export type Wordbook = {
   id: WordbookId;
@@ -47,6 +54,44 @@ const cet4Words = normalizeWords([
   "competition", "creative", "efficient", "frequent", "independent", "responsible", "solution",
 ]);
 
+// 按六级常见的学术、社会与论证场景自主精选，不对应或复制任何官方词表。
+const cet6Words = normalizeWords([
+  "abstract", "abundant", "accelerate", "accommodate", "accumulate", "acknowledge", "adequate",
+  "advocate", "allocate", "alter", "ambiguous", "anticipate", "apparent", "articulate", "assess",
+  "attain", "attribute", "authentic", "automate", "barrier", "bias", "capacity", "cease", "clarify",
+  "coherent", "collaborate", "compensate", "compile", "complement", "comprehensive", "comprise",
+  "conceive", "consecutive", "constrain", "consult", "controversy", "convert", "coordinate", "crucial",
+  "cumulative", "debate", "dedicate", "demonstrate", "derive", "detect", "diminish", "discrete",
+  "distribute", "diverse", "domestic", "dominate", "elaborate", "eliminate", "emerge", "empirical",
+  "encounter", "enhance", "equivalent", "ethical", "evaluate", "exceed", "exclude", "explicit",
+  "exploit", "facilitate", "flexible", "fluctuate", "formulate", "framework", "fundamental",
+  "hypothesis", "illustrate", "imply", "incentive", "inevitable", "infer", "inhibit", "initiate",
+  "innovate", "integrate", "interpret", "intervene", "intrinsic", "justify", "legislate", "mature",
+  "mechanism", "modify", "monitor", "motivate", "neutral", "nevertheless", "objective", "obtain",
+  "occupy", "orient", "overlap", "perceive", "persist", "phenomenon", "preliminary", "presume",
+  "priority", "prohibit", "prospect", "reinforce", "reject", "relevant", "reluctant", "resolve",
+  "retain", "reveal", "rigorous", "sector", "simulate", "stable", "substitute", "sustain",
+  "transform", "transmit", "valid", "violate", "virtual",
+]);
+
+// 围绕研究阅读、抽象论证与人文社科语境自主精选，不对应或复制任何教材词表。
+const postgraduateWords = normalizeWords([
+  "abstraction", "accountability", "adjacent", "adversity", "aesthetic", "analogy", "anomaly",
+  "arbitrary", "architecture", "ascertain", "assimilate", "autonomy", "bureaucracy", "categorical",
+  "chronology", "cognition", "compatible", "compelling", "compliance", "compound", "concession",
+  "concurrent", "configuration", "consensus", "constituent", "contemplate", "contradict", "conventional",
+  "correlate", "credibility", "criterion", "deficiency", "delineate", "demographic", "deploy",
+  "deteriorate", "dialectical", "differentiate", "dilemma", "discourse", "discriminate", "ecosystem",
+  "endeavor", "equilibrium", "eradicate", "evolution", "excerpt", "feasible", "fiscal", "foster",
+  "hierarchy", "ideology", "implicit", "indispensable", "infrastructure", "inherent", "intellectual",
+  "legitimate", "marginal", "mediate", "metaphor", "methodology", "mitigate", "narrative", "normative",
+  "nuance", "paradigm", "paradox", "parameter", "perspective", "plausible", "pluralism", "pragmatic",
+  "premise", "prevalence", "profound", "qualitative", "quantify", "rational", "reciprocal", "reconcile",
+  "refine", "resilient", "rhetoric", "scholarship", "skeptical", "socioeconomic", "sovereignty",
+  "spectrum", "structural", "subordinate", "successive", "synthesis", "systematic", "tentative",
+  "theoretical", "threshold", "trajectory", "transcend", "undermine", "validity", "variable", "vulnerable",
+]);
+
 const conceptStarterWords = normalizeWords([
   "family", "friend", "school", "teacher", "student", "lesson", "question", "answer", "picture", "window",
   "garden", "kitchen", "bedroom", "morning", "evening", "breakfast", "dinner", "coffee", "market",
@@ -76,6 +121,8 @@ const conceptProgressWords = normalizeWords([
 const mixedWords = normalizeWords([
   ...winterWords,
   ...cet4Words,
+  ...cet6Words,
+  ...postgraduateWords,
   ...conceptStarterWords,
   ...conceptProgressWords,
 ]);
@@ -96,6 +143,22 @@ export const WORD_BOOKS: Record<WordbookId, Wordbook> = {
     description: "校园、社会与学术场景中的常用词，整体长度和难度更高。",
     sourceNote: "自主整理，非官方考试词表",
     words: cet4Words,
+  },
+  cet6: {
+    id: "cet6",
+    label: "大学六级 · 进阶精选",
+    shortLabel: "六级精选",
+    description: "偏重学术阅读、社会议题与抽象表达，长词更多，适合进阶打字挑战。",
+    sourceNote: "自主精选，非官方考试词表",
+    words: cet6Words,
+  },
+  postgraduate: {
+    id: "postgraduate",
+    label: "考研英语 · 阅读精选",
+    shortLabel: "考研精选",
+    description: "覆盖研究阅读、人文社科与复杂论证语境，整体难度和长词比例最高。",
+    sourceNote: "自主精选，不复制特定教材词表",
+    words: postgraduateWords,
   },
   conceptStarter: {
     id: "conceptStarter",

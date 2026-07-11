@@ -20,6 +20,8 @@ const ROOM_ENGINE_OPTIONS = {
   wordbooks: {
     winter: WORD_BOOKS.winter.words,
     cet4: WORD_BOOKS.cet4.words,
+    cet6: WORD_BOOKS.cet6.words,
+    postgraduate: WORD_BOOKS.postgraduate.words,
     conceptStarter: WORD_BOOKS.conceptStarter.words,
     conceptProgress: WORD_BOOKS.conceptProgress.words,
     mixed: WORD_BOOKS.mixed.words,

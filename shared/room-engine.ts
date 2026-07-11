@@ -10,6 +10,7 @@ import type {
   RoomSnapshot,
   RoomTypingState,
   RoomWord,
+  SnowWordKind,
   SnowfallLevel,
   Team,
   WordbookId,
@@ -25,6 +26,10 @@ const ATTACK_RESOLVE_DELAY_MS = 1_510;
 const ACTOR_QUEUE_INTERVAL_MS = 1_850;
 const COMBO_WINDOW_MS = 4_200;
 const MAX_PLAYER_NAME_LENGTH = 8;
+const FROST_WORD_MIN_LENGTH = 11;
+const FROST_SPAWN_CHANCE = 0.08;
+const FROST_DAMAGE = 15;
+const FROST_FREEZE_MS = 1_000;
 
 type RandomSource = () => number;
 
@@ -164,6 +169,8 @@ const SNOWFALL_PROFILES: Record<
 const DEFAULT_WORDBOOKS: Record<WordbookId, readonly string[]> = {
   winter: ["snow", "coat", "warm", "tree", "star", "moon", "river", "cocoa", "skate", "scarf", "glove", "winter", "frozen", "silver", "forest", "holiday"],
   cet4: ["ability", "academic", "access", "achieve", "adapt", "advance", "benefit", "career", "challenge", "community", "compare", "complex", "conduct", "context", "culture", "develop"],
+  cet6: ["abstract", "abundant", "accelerate", "acknowledge", "adequate", "advocate", "allocate", "ambiguous", "anticipate", "articulate", "coherent", "comprehensive", "derive", "empirical", "hypothesis", "inevitable"],
+  postgraduate: ["abstraction", "accountability", "architecture", "ascertain", "autonomy", "configuration", "credibility", "dialectical", "differentiate", "equilibrium", "indispensable", "infrastructure", "methodology", "perspective", "socioeconomic", "theoretical"],
   conceptStarter: ["family", "friend", "school", "teacher", "student", "lesson", "question", "answer", "picture", "window", "garden", "kitchen", "morning", "evening", "market", "station"],
   conceptProgress: ["accident", "adventure", "airport", "ancient", "attention", "audience", "behavior", "business", "captain", "century", "conversation", "decision", "discover", "distance", "electric", "enormous"],
   mixed: [],
@@ -211,6 +218,10 @@ function sanitizeWords(words: readonly string[]) {
   return Array.from(new Set(words.map((word) => word.trim().toLowerCase()).filter((word) => /^[a-z]{1,14}$/.test(word))));
 }
 
+function isFrostWordCandidate(word: string) {
+  return word.length >= FROST_WORD_MIN_LENGTH;
+}
+
 function hasPrefixCollision(candidate: string, activeWords: Set<string>) {
   return [...activeWords].some((active) => candidate.startsWith(active) || active.startsWith(candidate));
 }
@@ -250,6 +261,7 @@ function makeSeat(spec: SeatSpec, active: boolean): InternalPlayer {
     damage: 0,
     combo: 0,
     bestCombo: 0,
+    frozenUntil: 0,
     controller: { kind: "ai", level: spec.aiLevel },
     active,
     slot: spec.slot,
@@ -285,16 +297,23 @@ export class RoomEngine {
 
   private constructor(state: EngineState, options: RoomEngineOptions = {}) {
     this.state = state;
+    for (const player of this.state.players) player.frozenUntil ??= 0;
+    for (const word of this.state.words) word.kind ??= "normal";
+    for (const attack of this.state.pendingAttacks) attack.kind ??= "normal";
     this.random = options.random ?? Math.random;
     const supplied = options.wordbooks ?? {};
     const winter = sanitizeWords(supplied.winter ?? DEFAULT_WORDBOOKS.winter);
     const cet4 = sanitizeWords(supplied.cet4 ?? DEFAULT_WORDBOOKS.cet4);
+    const cet6 = sanitizeWords(supplied.cet6 ?? DEFAULT_WORDBOOKS.cet6);
+    const postgraduate = sanitizeWords(supplied.postgraduate ?? DEFAULT_WORDBOOKS.postgraduate);
     const starter = sanitizeWords(supplied.conceptStarter ?? DEFAULT_WORDBOOKS.conceptStarter);
     const progress = sanitizeWords(supplied.conceptProgress ?? DEFAULT_WORDBOOKS.conceptProgress);
-    const mixed = sanitizeWords(supplied.mixed ?? [...winter, ...cet4, ...starter, ...progress]);
+    const mixed = sanitizeWords(supplied.mixed ?? [...winter, ...cet4, ...cet6, ...postgraduate, ...starter, ...progress]);
     this.wordbooks = {
       winter: winter.length ? winter : DEFAULT_WORDBOOKS.winter,
       cet4: cet4.length ? cet4 : DEFAULT_WORDBOOKS.cet4,
+      cet6: cet6.length ? cet6 : DEFAULT_WORDBOOKS.cet6,
+      postgraduate: postgraduate.length ? postgraduate : DEFAULT_WORDBOOKS.postgraduate,
       conceptStarter: starter.length ? starter : DEFAULT_WORDBOOKS.conceptStarter,
       conceptProgress: progress.length ? progress : DEFAULT_WORDBOOKS.conceptProgress,
       mixed: mixed.length ? mixed : DEFAULT_WORDBOOKS.winter,
@@ -442,6 +461,7 @@ export class RoomEngine {
     seat.combo = 0;
     seat.bestCombo = 0;
     seat.lastClaimAt = 0;
+    seat.frozenUntil = 0;
     this.state.typingByPlayer[seat.id] = { buffer: "", targetWordId: null };
     this.reconcileAiNames();
     this.touch();
@@ -532,10 +552,14 @@ export class RoomEngine {
     let guard = 0;
     while (guard < 10_000) {
       guard += 1;
-      const task = this.nextTask();
+      const task = this.nextTask(events.length === 0);
       if (!task || task.at > now) break;
-      this.runTask(task, events);
-      if (events.length) break;
+      const taskEvents: RoomEvent[] = [];
+      this.runTask(task, taskEvents);
+      if (taskEvents.length) {
+        if (events.length === 0) events.push(taskEvents[0]);
+        else this.state.deferredEvents.push(taskEvents[0]);
+      }
     }
     if (guard >= 10_000) return this.failure("TASK_OVERFLOW", "Too many scheduled room tasks were due.", events);
     return this.success(events);
@@ -545,27 +569,39 @@ export class RoomEngine {
     return this.nextTask()?.at ?? null;
   }
 
-  spawnWord(now: number, forcedText?: string): RoomWord | null {
+  spawnWord(now: number, forcedText?: string, forcedKind: SnowWordKind = "normal"): RoomWord | null {
     if (this.state.phase !== "playing") return null;
     const profile = SNOWFALL_PROFILES[this.state.config.snowfallLevel];
     const maxWords = clamp(this.activePlayers().length + profile.wordBonus, profile.minimumWords, profile.maximumWords);
     if (this.state.words.length >= maxWords) return null;
     const activeTexts = new Set(this.state.words.map((word) => word.text));
     let text = forcedText?.trim().toLowerCase() ?? "";
+    let kind: SnowWordKind = forcedText ? forcedKind : "normal";
     if (text) {
       if (!/^[a-z]{1,14}$/.test(text) || activeTexts.has(text) || hasPrefixCollision(text, activeTexts)) return null;
     } else {
-      text = this.drawWord(activeTexts) ?? "";
+      const canSpawnFrost = !this.state.words.some((word) => word.kind === "frost");
+      const wantsFrost = forcedKind === "frost" || (canSpawnFrost && this.roll() < FROST_SPAWN_CHANCE);
+      if (canSpawnFrost && wantsFrost) {
+        text = this.drawFrostWord(activeTexts) ?? "";
+        kind = text ? "frost" : "normal";
+      }
+      if (!text) text = this.drawWord(activeTexts) ?? "";
       if (!text) return null;
     }
     const ai = this.randomItem(this.aliveAiPlayers());
-    const timing = ai && ai.controller.kind === "ai"
+    const rawTiming = ai && ai.controller.kind === "ai"
       ? calculateAiTiming(ai.controller.level, text, now, this.random)
+      : null;
+    const frozenDelay = ai ? Math.max(0, ai.frozenUntil - now) : 0;
+    const timing = rawTiming
+      ? { startedAt: rawTiming.startedAt + frozenDelay, claimAt: rawTiming.claimAt + frozenDelay }
       : null;
     const id = this.state.nextWordId++;
     const word: RoomWord = {
       id,
       text,
+      kind,
       x: 17 + this.roll() * 66,
       restY: 52 + ((id * 11) % 20),
       speed: 4 + this.roll() * 2.3,
@@ -597,6 +633,7 @@ export class RoomEngine {
       damage: player.damage,
       combo: player.combo,
       bestCombo: player.bestCombo,
+      frozenUntil: player.frozenUntil,
       controller: clone(player.controller),
     };
   }
@@ -703,6 +740,7 @@ export class RoomEngine {
     player.active = true;
     player.position = teammates.length;
     player.health = player.maxHealth;
+    player.frozenUntil = 0;
     if (player.team === "pine") this.state.config.pineSize = teammates.length + 1;
     else this.state.config.berrySize = teammates.length + 1;
     return true;
@@ -735,6 +773,7 @@ export class RoomEngine {
     target.disconnectDeadline = identity.disconnectDeadline;
     target.joinOrder = identity.joinOrder;
     target.health = target.maxHealth;
+    target.frozenUntil = 0;
     this.clearTyping(player.id);
     this.clearTyping(target.id);
     if (wasHost) this.setHost(target);
@@ -845,6 +884,7 @@ export class RoomEngine {
       player.bestCombo = 0;
       player.lastClaimAt = 0;
       player.actorNextAt = now;
+      player.frozenUntil = 0;
       this.clearTyping(player.id);
     }
     this.state.words = [];
@@ -874,6 +914,7 @@ export class RoomEngine {
       player.combo = 0;
       player.bestCombo = 0;
       player.lastClaimAt = 0;
+      player.frozenUntil = 0;
       this.clearTyping(player.id);
     }
     this.invalidateReadyStates();
@@ -884,6 +925,10 @@ export class RoomEngine {
   private typeKey(player: InternalPlayer, rawKey: string, now: number, events: RoomEvent[]): EngineResult {
     if (this.state.phase !== "playing") return this.failure("WRONG_STAGE", "Typing is only available during a match.", events);
     if (player.health <= 0) return this.failure("PLAYER_OUT", "Knocked-out players cannot type.", events);
+    if (player.frozenUntil > now) {
+      this.emit(events, { type: "typing.rejected", playerId: player.id, reason: "FROZEN" });
+      return this.success(events);
+    }
     const key = String(rawKey ?? "").toLowerCase();
     if (!/^[a-z]$/.test(key)) return this.failure("INVALID_KEY", "Type one English letter at a time.", events);
     const typing = this.typing(player.id);
@@ -916,14 +961,16 @@ export class RoomEngine {
     if (this.state.phase !== "playing") return false;
     const wordIndex = this.state.words.findIndex((word) => word.id === wordId);
     const attacker = this.state.players.find((player) => player.active && player.id === attackerId && player.health > 0);
-    if (wordIndex < 0 || !attacker) return false;
+    if (wordIndex < 0 || !attacker || attacker.frozenUntil > now) return false;
     const [word] = this.state.words.splice(wordIndex, 1);
-    let damage = calculateWordDamage(word.text.length);
+    let damage = word.kind === "frost" ? FROST_DAMAGE : calculateWordDamage(word.text.length);
     if (attacker.controller.kind === "human") {
       attacker.combo = attacker.lastClaimAt > 0 && now - attacker.lastClaimAt < COMBO_WINDOW_MS ? attacker.combo + 1 : 1;
       attacker.bestCombo = Math.max(attacker.bestCombo, attacker.combo);
       attacker.lastClaimAt = now;
-      damage = clamp(damage + Math.min(2, Math.floor(attacker.combo / 5)), 10, 15);
+      if (word.kind === "normal") {
+        damage = clamp(damage + Math.min(2, Math.floor(attacker.combo / 5)), 10, 15);
+      }
     }
     attacker.claims += 1;
     const startsAt = Math.max(now, attacker.actorNextAt || now);
@@ -937,6 +984,7 @@ export class RoomEngine {
       attackerId: attacker.id,
       targetId: target?.id ?? null,
       word: word.text,
+      kind: word.kind,
       damage,
       startsAt,
       throwAt: startsAt + ATTACK_THROW_DELAY_MS,
@@ -966,9 +1014,9 @@ export class RoomEngine {
     return this.activePlayers(team).filter((player) => player.health > 0).sort((a, b) => a.position - b.position)[0] ?? null;
   }
 
-  private nextTask(): DueTask | null {
+  private nextTask(includeDeferredEvents = true): DueTask | null {
     const tasks: DueTask[] = [];
-    if (this.state.deferredEvents.length) {
+    if (includeDeferredEvents && this.state.deferredEvents.length) {
       tasks.push({ at: 0, priority: -1, kind: "event", id: "deferred-event" });
     }
     if (this.state.phase === "countdown" && this.state.countdownEndsAt !== null) {
@@ -1014,7 +1062,9 @@ export class RoomEngine {
       this.state.startedAt = task.at;
       this.state.countdownEndsAt = null;
       const profile = SNOWFALL_PROFILES[this.state.config.snowfallLevel];
-      for (let index = 0; index < profile.initialWords; index += 1) this.spawnWord(task.at);
+      for (let index = 0; index < profile.initialWords; index += 1) {
+        this.spawnWord(task.at, undefined, index === 0 ? "frost" : "normal");
+      }
       this.state.nextSpawnAt = task.at + this.createSpawnDelay();
       this.emit(events, { type: "match.started", startedAt: task.at });
       return;
@@ -1034,6 +1084,13 @@ export class RoomEngine {
         this.touch();
         return;
       }
+      if (ai.frozenUntil > task.at) {
+        const delay = ai.frozenUntil - task.at;
+        if (word.aiStartedAt !== null && word.aiStartedAt > task.at) word.aiStartedAt += delay;
+        word.aiClaimAt += delay;
+        this.touch();
+        return;
+      }
       this.claimWord(word.id, ai.id, task.at, events);
       return;
     }
@@ -1049,17 +1106,21 @@ export class RoomEngine {
       attack.resolved = true;
       attack.targetId = target?.id ?? null;
       let actualDamage = 0;
+      let frozenUntil: number | null = null;
       if (attackerAlive && attacker && target) {
         actualDamage = Math.min(target.health, attack.damage);
         target.health -= actualDamage;
         attacker.damage += actualDamage;
         if (target.health <= 0) {
+          target.frozenUntil = 0;
           for (const queuedAttack of this.state.pendingAttacks) {
             if (
               !queuedAttack.resolved
               && queuedAttack.attackerId === target.id
             ) queuedAttack.resolved = true;
           }
+        } else if (attack.kind === "frost") {
+          frozenUntil = this.freezePlayer(target, task.at);
         }
       }
       let winner: Team | null = null;
@@ -1076,6 +1137,7 @@ export class RoomEngine {
         targetId: target?.id ?? null,
         actualDamage,
         targetHealth: target?.health ?? null,
+        frozenUntil,
         missed: !attackerAlive || !target,
         winner,
       });
@@ -1126,6 +1188,7 @@ export class RoomEngine {
     player.bestCombo = 0;
     player.lastClaimAt = 0;
     player.actorNextAt = 0;
+    player.frozenUntil = 0;
   }
 
   private setHost(player: InternalPlayer | null) {
@@ -1133,6 +1196,21 @@ export class RoomEngine {
       if (candidate.controller.kind === "human") candidate.controller.isHost = candidate.id === player?.id;
     }
     this.state.hostPlayerId = player?.id ?? null;
+  }
+
+  private freezePlayer(player: InternalPlayer, now: number) {
+    const previousEnd = Math.max(now, player.frozenUntil);
+    const nextEnd = Math.max(player.frozenUntil, now + FROST_FREEZE_MS);
+    const extension = nextEnd - previousEnd;
+    player.frozenUntil = nextEnd;
+    if (extension > 0 && player.controller.kind === "ai") {
+      for (const word of this.state.words) {
+        if (word.aiPlayerId !== player.id || word.aiClaimAt === null || word.aiClaimAt <= now) continue;
+        if (word.aiStartedAt !== null && word.aiStartedAt > now) word.aiStartedAt += extension;
+        word.aiClaimAt += extension;
+      }
+    }
+    return nextEnd;
   }
 
   private assignWordAi(word: RoomWord, now: number) {
@@ -1144,9 +1222,10 @@ export class RoomEngine {
       return;
     }
     const timing = calculateAiTiming(ai.controller.level, word.text, now, this.random);
+    const frozenDelay = Math.max(0, ai.frozenUntil - now);
     word.aiPlayerId = ai.id;
-    word.aiStartedAt = timing.startedAt;
-    word.aiClaimAt = timing.claimAt;
+    word.aiStartedAt = timing.startedAt + frozenDelay;
+    word.aiClaimAt = timing.claimAt + frozenDelay;
   }
 
   private createSpawnDelay() {
@@ -1155,6 +1234,16 @@ export class RoomEngine {
     const weatherRoll = this.roll();
     const weatherScale = weatherRoll < 0.18 ? 0.58 : weatherRoll > 0.9 ? 1.45 : 1;
     return Math.round(this.between(profile.interval) * playerScale * weatherScale);
+  }
+
+  private drawFrostWord(activeTexts: Set<string>) {
+    const source = this.wordbooks[this.state.config.wordbookId].filter(isFrostWordCandidate);
+    const recent = new Set(this.state.recentWords);
+    const fresh = source.filter((word) => !activeTexts.has(word) && !recent.has(word) && !hasPrefixCollision(word, activeTexts));
+    const fallback = source.filter((word) => !activeTexts.has(word) && !hasPrefixCollision(word, activeTexts));
+    const word = this.randomItem(fresh.length ? fresh : fallback);
+    if (word) this.state.wordBag = this.state.wordBag.filter((candidate) => candidate !== word);
+    return word;
   }
 
   private drawWord(activeTexts: Set<string>) {
@@ -1167,8 +1256,10 @@ export class RoomEngine {
     if (!this.state.wordBag.length) {
       const recent = new Set(this.state.recentWords);
       const source = this.wordbooks[bookId];
-      const fresh = source.filter((word) => !recent.has(word));
-      this.state.wordBag = this.shuffle(fresh.length ? fresh : source);
+      const regularSource = source.filter((word) => !isFrostWordCandidate(word));
+      const pool = regularSource.length ? regularSource : source;
+      const fresh = pool.filter((word) => !recent.has(word));
+      this.state.wordBag = this.shuffle(fresh.length ? fresh : pool);
     }
     const recent = new Set(this.state.recentWords);
     let index = this.state.wordBag.findIndex((word) => !activeTexts.has(word) && !recent.has(word) && !hasPrefixCollision(word, activeTexts));
@@ -1193,5 +1284,9 @@ export const ROOM_ENGINE_CONSTANTS = {
   disconnectGraceMs: DISCONNECT_GRACE_MS,
   countdownMs: COUNTDOWN_MS,
   actorQueueIntervalMs: ACTOR_QUEUE_INTERVAL_MS,
+  frostWordMinLength: FROST_WORD_MIN_LENGTH,
+  frostSpawnChance: FROST_SPAWN_CHANCE,
+  frostDamage: FROST_DAMAGE,
+  frostFreezeMs: FROST_FREEZE_MS,
   attackResolveDelayMs: ATTACK_RESOLVE_DELAY_MS,
 } as const;
