@@ -1,4 +1,93 @@
-# 河岸雪仗 · Snow Type Battle
+# SnowKey Battle
+
+> A real-time typing snowball fight across a frozen river.
+
+[Play the live game](https://snow-fighting-game.liuxingzhi99.workers.dev/) · [中文说明](#中文说明)
+
+SnowKey Battle is a browser remake of a childhood multiplayer typing game. English words fall as snowflakes: type one before anyone else to catch it, pack it into a snowball, and throw it at the opposing team. The character art is drawn from scratch with CSS and only takes visual inspiration from the warm, rounded winter outfits of [Snowcraft](https://github.com/seanpm2001/Snowcraft); no original Snowcraft sprites or assets are included.
+
+## Highlights
+
+- Real-time room-code multiplayer for up to eight humans, with server-authoritative word claims, damage, formations, and match results.
+- Independent team sizes from one to four players, including asymmetric matches such as 1v2 and 2v3.
+- Individual 100 HP health bars and formation tactics: new players enter at the back, while the living frontline absorbs incoming snowballs.
+- Every AI seat can be removed or configured as Rookie, Skilled, or Expert; newly created AI defaults to Skilled.
+- English-only typing with seven built-in wordbooks, including large CET-4, CET-6, and Postgraduate English collections.
+- Fully animated catch, pack, wind-up, throw, flight, hit, freeze, and knockdown states.
+- Super Snowflakes use rotating long words, hit the whole enemy team for 15 damage, and freeze survivors for one second.
+- Chinese and English interfaces selected from the browser language, with a visible manual switch.
+
+## Quick start
+
+Requirements: Node.js 22.13 or newer.
+
+```bash
+git clone https://github.com/pystashell/snowkey-battle.git
+cd snowkey-battle
+npm ci
+npm run dev
+```
+
+Open `http://localhost:3000`. Local mode works immediately; the development server also provides the room API and Durable Object used by online mode.
+
+## How online rooms work
+
+1. Choose **Online with Friends**, enter a display name, and create a room.
+2. Send the six-character room code or invitation link to friends.
+3. Friends open the same deployed URL and join with their own names.
+4. The host chooses team sizes, wordbook, snowfall density, formation, and AI difficulty.
+5. Players ready up and the host starts the match.
+
+The Cloudflare Worker is the referee. Clients only send lobby commands and keystrokes; the server owns snowflake spawning, typing races, queued throws, target locking, health, AI timing, reconnects, and victory. A disconnected human keeps their seat for 60 seconds before AI takes over. Rooms are retired after the final human leaves.
+
+## Tech stack
+
+| Layer | Technology |
+| --- | --- |
+| UI | React 19, Next.js App Router, TypeScript, CSS animation |
+| Build/runtime | vinext and Vite |
+| Realtime backend | Cloudflare Workers, WebSockets, Durable Objects |
+| Testing | Node test runner, SSR assertions, live two-client WebSocket smoke test |
+
+## Test and deploy
+
+```bash
+npm test
+npm run lint
+```
+
+Run a real room smoke test against a running local server:
+
+```bash
+npm run test:live
+```
+
+Or test the public deployment:
+
+```bash
+SNOW_BATTLE_URL=https://your-worker.workers.dev npm run test:live
+```
+
+Deploy your own Worker and Durable Object:
+
+```bash
+npx wrangler login
+npm run deploy
+```
+
+The web app, room API, and WebSocket endpoint share one `workers.dev` origin, so no separate server or cross-origin configuration is required.
+
+## Wordbook data
+
+The CET-4, CET-6, and Postgraduate English books are generated primarily from the exam tags in [ECDICT](https://github.com/skywind3000/ECDICT), pinned to revision `bc015ed2e24a7abef49fc6dbbb7fe32c1dadaf8b`. ECDICT is distributed under the MIT License; its license copy is included in this repository. A small set of 18–24-letter game challenge words is added separately and must not be interpreted as an official exam syllabus.
+
+Regenerate the academic wordbooks with:
+
+```bash
+npm run generate:wordbooks
+```
+
+## 中文说明
 
 一个隔着冰河、靠英文打字抢雪花的童年小游戏重制版。角色采用原创 CSS 绘制，只参考 Snowcraft 圆润、厚实的冬装小人气质，不使用原作精灵或素材。
 
@@ -14,7 +103,7 @@
 - 普通词与超级雪花词分别使用无放回洗牌袋，并回避近期出现过的词；每册最长的 10 个词轮换为超级雪花，完整一轮前不会重复。
 - 超级雪花命中对方所有存活角色 15 点，并把他们冻住 1 秒；普通雪球只攻击锁定时的敌方前排。
 - 雪量有舒缓、标准、暴雪三档；每次出雪间隔都会随机变化，并偶尔形成短阵雪或空档。
-- 每个 AI 席位都可独立选择新手、熟练或高手强度。
+- 每个 AI 席位都可单独移除，也可选择新手、熟练或高手强度；新增和补位 AI 默认使用熟练难度。
 - 抢到单词后会完整播放抓取、攥雪球、蓄力投掷、飞行和受击动画。
 
 ## 判定与数值
@@ -33,7 +122,7 @@
 1. 首页选择“好友联机”，输入昵称后点击“创建房间”。
 2. 房主复制 6 位房间码或邀请链接发给朋友。
 3. 朋友打开同一个已部署网址，输入房间码加入；最多 8 位真人。
-4. 房主可分别设置两队 1–4 人、单词册、雪量，并为无人占用的席位设置 AI 强度。
+4. 房主可分别设置两队 1–4 人、单词册、雪量，逐个移除 AI，并为无人占用的席位设置 AI 强度；新加入的真人默认站在队尾。
 5. 玩家选择队伍并准备，房主点击“开始对战”。人数可以不对称，例如 1v2、2v3。
 
 刷新网页会使用保存在本机浏览器中的房间凭据自动重连。意外掉线的席位保留 60 秒，超过宽限期后由 AI 接管；房主显式离开时，最早加入的剩余真人自动接任。最后一位真人显式离开，或最后一个掉线席位超过宽限期后，房间会立即回收；6 小时无活动回收仍作为兜底。
