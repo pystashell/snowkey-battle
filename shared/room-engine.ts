@@ -560,6 +560,11 @@ export class RoomEngine {
     return this.success(events);
   }
 
+  sessionIdForPlayer(playerId: string): string | null {
+    const player = this.state.players.find((candidate) => candidate.active && candidate.id === playerId);
+    return player?.controller.kind === "human" ? player.sessionId : null;
+  }
+
   leave(sessionId: string, now: number): EngineResult {
     const events = this.advance(now).events;
     const player = this.playerForSession(sessionId);
@@ -602,6 +607,8 @@ export class RoomEngine {
         return this.setAiLevel(player, command.playerId, command.level, events);
       case "lobby.remove_ai":
         return this.removeAi(player, command.playerId, events);
+      case "lobby.remove_player":
+        return this.removePlayer(player, command.playerId, now, events);
       case "match.start":
         return this.startMatch(player, now, events);
       case "match.restart":
@@ -959,6 +966,18 @@ export class RoomEngine {
     this.reconcileAiNames();
     this.invalidateReadyStates();
     this.touch();
+    return this.success(events);
+  }
+
+  private removePlayer(actor: InternalPlayer, playerId: string, now: number, events: RoomEvent[]): EngineResult {
+    if (this.state.phase !== "lobby") return this.failure("WRONG_STAGE", "Players can only be removed in the lobby.", events);
+    if (actor.controller.kind !== "human" || !actor.controller.isHost) return this.failure("HOST_ONLY", "Only the host can remove human players.", events);
+    const target = this.state.players.find((player) => player.active && player.id === playerId);
+    if (!target || target.controller.kind !== "human") return this.failure("NOT_A_HUMAN", "The selected seat is not controlled by a human player.", events);
+    if (target.id === actor.id) return this.failure("CANNOT_REMOVE_HOST", "The host cannot remove themselves.", events);
+    target.fallbackAiLevel = DEFAULT_AI_LEVEL;
+    this.replaceHumanWithAi(target, now, events);
+    this.invalidateReadyStates();
     return this.success(events);
   }
 
@@ -1383,9 +1402,7 @@ export class RoomEngine {
   private reconcileHostInvariant() {
     const humans = this.humanPlayers().sort((left, right) => left.joinOrder - right.joinOrder);
     const current = humans.find((player) => player.id === this.state.hostPlayerId) ?? null;
-    const flagged = humans.find((player) => player.controller.kind === "human" && player.controller.isHost) ?? null;
-    const connected = humans.find((player) => player.controller.kind === "human" && player.controller.connected) ?? null;
-    this.setHost(current ?? flagged ?? connected ?? humans[0] ?? null);
+    this.setHost(current ?? humans[0] ?? null);
   }
 
   private freezePlayer(player: InternalPlayer, now: number) {

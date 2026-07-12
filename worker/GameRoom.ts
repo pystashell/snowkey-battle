@@ -36,6 +36,7 @@ type StoredRoom = {
   engine: SerializedRoom;
   lastActivityAt: number;
   lastSequenceBySession: Record<string, number>;
+  kickedSessionIds?: string[];
 };
 
 type SocketAttachment = {
@@ -118,6 +119,7 @@ export class GameRoom {
   private retiring = false;
   private lastActivityAt = 0;
   private lastSequenceBySession: Record<string, number> = {};
+  private kickedSessionIds: string[] = [];
 
   constructor(ctx: DurableObjectState, env: GameRoomEnv) {
     this.ctx = ctx;
@@ -131,6 +133,7 @@ export class GameRoom {
         this.engine = RoomEngine.restore(stored.engine, ROOM_ENGINE_OPTIONS);
         this.lastActivityAt = stored.lastActivityAt;
         this.lastSequenceBySession = stored.lastSequenceBySession ?? {};
+        this.kickedSessionIds = (stored.kickedSessionIds ?? []).filter((sessionId) => typeof sessionId === "string");
         const now = Date.now();
         if (now >= this.lastActivityAt + ROOM_IDLE_TTL_MS) {
           await this.retireRoom(
@@ -159,6 +162,7 @@ export class GameRoom {
         this.engine = null;
         this.lastActivityAt = 0;
         this.lastSequenceBySession = {};
+        this.kickedSessionIds = [];
         if ((await ctx.storage.getAlarm()) !== null) await ctx.storage.deleteAlarm();
         await ctx.storage.deleteAll();
       }
@@ -330,6 +334,12 @@ export class GameRoom {
       return;
     }
 
+    if (this.kickedSessionIds.includes(message.sessionId)) {
+      this.sendError(socket, "KICKED_FROM_ROOM", "你已被房主移出房间。");
+      this.closeSocket(socket, 4403, "Removed by host");
+      return;
+    }
+
     const now = Date.now();
     const result = this.engine.join({
       sessionId: message.sessionId,
@@ -439,6 +449,9 @@ export class GameRoom {
       return;
     }
 
+    const kickedSessionId = message.command.op === "lobby.remove_player"
+      ? this.engine.sessionIdForPlayer(message.command.playerId)
+      : null;
     const result = this.engine.handleCommand(attachment.sessionId, message.command, now);
     const explicitlyLeft = result.ok && message.command.op === "presence.leave";
     if (explicitlyLeft) {
@@ -483,11 +496,16 @@ export class GameRoom {
     attachment.lastSequence = message.sequence;
     socket.serializeAttachment(attachment);
     this.lastSequenceBySession[attachment.sessionId] = message.sequence;
+    if (kickedSessionId) {
+      this.kickedSessionIds = [...this.kickedSessionIds.filter((sessionId) => sessionId !== kickedSessionId), kickedSessionId].slice(-64);
+      delete this.lastSequenceBySession[kickedSessionId];
+    }
     this.lastActivityAt = now;
     await this.persist();
     await this.scheduleNextAlarm();
 
     this.acknowledge(socket, message, result.revision);
+    if (kickedSessionId) this.closeKickedSession(kickedSessionId);
     this.broadcastMutation(result, now);
   }
 
@@ -544,6 +562,7 @@ export class GameRoom {
     this.engine = null;
     this.lastActivityAt = 0;
     this.lastSequenceBySession = {};
+    this.kickedSessionIds = [];
 
     for (const socket of this.ctx.getWebSockets()) {
       this.sendError(socket, errorCode, message);
@@ -565,6 +584,7 @@ export class GameRoom {
       engine: this.engine.serialize(),
       lastActivityAt: this.lastActivityAt,
       lastSequenceBySession: this.lastSequenceBySession,
+      kickedSessionIds: this.kickedSessionIds,
     };
     await this.ctx.storage.put(STORED_ROOM_KEY, stored);
   }
@@ -662,6 +682,17 @@ export class GameRoom {
       ...(id ? { id } : {}),
     };
     this.safeSend(socket, payload);
+  }
+
+  private closeKickedSession(sessionId: string) {
+    for (const socket of this.ctx.getWebSockets()) {
+      const attachment = this.readAttachment(socket);
+      if (!attachment.joined || attachment.sessionId !== sessionId) continue;
+      attachment.joined = false;
+      socket.serializeAttachment(attachment);
+      this.sendError(socket, "KICKED_FROM_ROOM", "你已被房主移出房间。");
+      this.closeSocket(socket, 4403, "Removed by host");
+    }
   }
 
   private safeSend(socket: WebSocket, message: ServerMessage) {

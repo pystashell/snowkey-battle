@@ -11,7 +11,8 @@ SnowKey Battle is a browser remake of a childhood multiplayer typing game. Engli
 - Real-time room-code multiplayer for up to eight humans, with server-authoritative word claims, damage, formations, and match results.
 - Independent team sizes from one to four players, including asymmetric matches such as 1v2 and 2v3.
 - Individual 100 HP health bars and formation tactics: new players enter at the back, while the living frontline absorbs incoming snowballs.
-- Every AI seat can be removed or configured as Rookie, Skilled, or Expert; newly created AI defaults to Skilled.
+- The host can remove AI seats or other human players from the lobby; newly created and vacated AI seats default to Skilled.
+- When the host leaves, ownership passes to the earliest remaining human by join order—never to AI.
 - English-only typing with seven built-in wordbooks, including large CET-4, CET-6, and Postgraduate English collections.
 - Fully animated catch, pack, wind-up, throw, flight, hit, freeze, and knockdown states.
 - Super Snowflakes use rotating long words, hit the whole enemy team for 15 damage, and freeze survivors for one second.
@@ -35,7 +36,7 @@ Open `http://localhost:3000`. Local mode works immediately; the development serv
 1. Choose **Online with Friends**, enter a display name, and create a room.
 2. Send the six-character room code or invitation link to friends.
 3. Friends open the same deployed URL and join with their own names.
-4. The host chooses team sizes, wordbook, snowfall density, formation, and AI difficulty.
+4. The host chooses team sizes, wordbook, snowfall density, formation, and AI difficulty, and may remove AI or other human players.
 5. Players ready up and the host starts the match.
 
 The Cloudflare Worker is the referee. Clients only send lobby commands and keystrokes; the server owns snowflake spawning, typing races, queued throws, target locking, health, AI timing, reconnects, and victory. A disconnected human keeps their seat for 60 seconds before AI takes over. Rooms are retired after the final human leaves.
@@ -103,7 +104,8 @@ npm run generate:wordbooks
 - 普通词与超级雪花词分别使用无放回洗牌袋，并回避近期出现过的词；每册最长的 10 个词轮换为超级雪花，完整一轮前不会重复。
 - 超级雪花命中对方所有存活角色 15 点，并把他们冻住 1 秒；普通雪球只攻击锁定时的敌方前排。
 - 雪量有舒缓、标准、暴雪三档；每次出雪间隔都会随机变化，并偶尔形成短阵雪或空档。
-- 每个 AI 席位都可单独移除，也可选择新手、熟练或高手强度；新增和补位 AI 默认使用熟练难度。
+- 房主可在大厅移除 AI 或其他真人；新增、补位和真人离开后留下的 AI 默认使用熟练难度。
+- 房主主动离开后，房主身份严格按加入顺序交给下一位真人，永远不会交给 AI。
 - 抢到单词后会完整播放抓取、攥雪球、蓄力投掷、飞行和受击动画。
 
 ## 判定与数值
@@ -122,7 +124,7 @@ npm run generate:wordbooks
 1. 首页选择“好友联机”，输入昵称后点击“创建房间”。
 2. 房主复制 6 位房间码或邀请链接发给朋友。
 3. 朋友打开同一个已部署网址，输入房间码加入；最多 8 位真人。
-4. 房主可分别设置两队 1–4 人、单词册、雪量，逐个移除 AI，并为无人占用的席位设置 AI 强度；新加入的真人默认站在队尾。
+4. 房主可分别设置两队 1–4 人、单词册、雪量，移除 AI 或其他真人，并为无人占用的席位设置 AI 强度；新加入的真人默认站在队尾。
 5. 玩家选择队伍并准备，房主点击“开始对战”。人数可以不对称，例如 1v2、2v3。
 
 刷新网页会使用保存在本机浏览器中的房间凭据自动重连。意外掉线的席位保留 60 秒，超过宽限期后由 AI 接管；房主显式离开时，最早加入的剩余真人自动接任。最后一位真人显式离开，或最后一个掉线席位超过宽限期后，房间会立即回收；6 小时无活动回收仍作为兜底。

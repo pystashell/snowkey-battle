@@ -295,9 +295,29 @@ export function useRoomSocket(options: UseRoomSocketOptions = {}) {
     }
 
     if (message.type === "error") {
+      if (message.code === "KICKED_FROM_ROOM") {
+        const credentials = credentialsRef.current;
+        if (credentials) {
+          safeRemoveStorage(credentialsKey(credentials.roomCode));
+          safeRemoveStorage(sequenceKey(credentials.sessionId));
+          if (safeReadStorage(LAST_ROOM_KEY) === credentials.roomCode) safeRemoveStorage(LAST_ROOM_KEY);
+        }
+        clearReconnectTimer();
+        clearPingTimer();
+        credentialsRef.current = null;
+        sequenceRef.current = 0;
+        lastRevisionRef.current = 0;
+        lastEventRevisionRef.current = 0;
+        welcomedRef.current = false;
+        setRoomCode(null);
+        setSnapshot(null);
+        setLastEvent(null);
+        reportError({ code: message.code, message: message.message }, true);
+        return;
+      }
       reportError({ code: message.code, message: message.message });
     }
-  }, [persistCredentials, reportError, schedulePing, updateServerTime]);
+  }, [clearPingTimer, clearReconnectTimer, persistCredentials, reportError, schedulePing, updateServerTime]);
 
   const openSocket = useCallback((credentials: StoredRoomCredentials, reconnecting: boolean) => {
     if (typeof window === "undefined") return;

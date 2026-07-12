@@ -116,6 +116,7 @@ class RoomClient {
 }
 
 const hostIdentity = credentials("Host");
+const kickTargetIdentity = credentials("KickTarget");
 const createResponse = await fetch(`${baseUrl}/api/rooms`, {
   method: "POST",
   headers: { "content-type": "application/json" },
@@ -129,11 +130,14 @@ assert.match(roomCode, /^[A-HJ-NP-Z2-9]{6}$/);
 
 const host = new RoomClient(roomCode, hostIdentity);
 const guest = new RoomClient(roomCode, credentials("Guest"));
+const kickTarget = new RoomClient(roomCode, kickTargetIdentity);
 let rejected = null;
+let kickedReconnect = null;
 
 try {
   const hostWelcome = await host.connect();
   const guestWelcome = await guest.connect();
+  const kickTargetWelcome = await kickTarget.connect();
   assert.equal(hostWelcome.snapshot.selfPlayerId, "pine-0");
   assert.notEqual(guestWelcome.snapshot.selfPlayerId, hostWelcome.snapshot.selfPlayerId);
   assert.equal(hostWelcome.snapshot.players.find((player) => player.id === "pine-0")?.name, "Host");
@@ -157,6 +161,32 @@ try {
   assert.ok(guestWelcome.snapshot.players
     .filter((player) => player.controller.kind === "ai")
     .every((player) => player.controller.level === "steady"));
+
+  guest.send({ op: "lobby.remove_player", playerId: kickTargetWelcome.snapshot.selfPlayerId });
+  const kickRejected = await guest.waitFor((message) => message.type === "error" && message.code === "HOST_ONLY");
+  assert.equal(kickRejected.code, "HOST_ONLY");
+
+  host.send({ op: "lobby.remove_player", playerId: hostWelcome.snapshot.selfPlayerId });
+  const hostProtected = await host.waitFor((message) => message.type === "error" && message.code === "CANNOT_REMOVE_HOST");
+  assert.equal(hostProtected.code, "CANNOT_REMOVE_HOST");
+
+  host.send({ op: "lobby.remove_player", playerId: kickTargetWelcome.snapshot.selfPlayerId });
+  const kicked = await kickTarget.waitFor((message) => message.type === "error" && message.code === "KICKED_FROM_ROOM");
+  assert.equal(kicked.code, "KICKED_FROM_ROOM");
+  const kickedClose = await kickTarget.waitForClose();
+  assert.equal(kickedClose.code, 4403);
+  const kickedSnapshot = await guest.waitFor((message) => message.type === "snapshot"
+    && message.snapshot.humanCount === 2
+    && message.snapshot.players.find((player) => player.id === kickTargetWelcome.snapshot.selfPlayerId)?.controller.kind === "ai");
+  assert.equal(
+    kickedSnapshot.snapshot.players.find((player) => player.id === kickTargetWelcome.snapshot.selfPlayerId)?.controller.level,
+    "steady",
+  );
+
+  kickedReconnect = new RoomClient(roomCode, kickTargetIdentity);
+  const blockedReconnect = await kickedReconnect.connect({ allowError: true, timeoutMs: 5_000 });
+  assert.equal(blockedReconnect.type, "error");
+  assert.equal(blockedReconnect.code, "KICKED_FROM_ROOM");
 
   const removableAi = guestWelcome.snapshot.players.find((player) => player.team === "berry" && player.controller.kind === "ai");
   assert.ok(removableAi);
@@ -272,6 +302,8 @@ try {
     frozeWholeEnemyTeamForOneSecond: true,
     guestMovedOwnSeat: true,
     hostTransferredToGuest: true,
+    hostKickedHumanPlayer: true,
+    kickedCredentialsWereBlocked: true,
     roomClosedAfterLastHumanLeft: true,
     retiredRoomRejectedLateJoin: true,
     synchronizedRevision: guestSynced.snapshot.revision,
@@ -279,5 +311,7 @@ try {
 } finally {
   host.close();
   guest.close();
+  kickTarget.close();
+  kickedReconnect?.close();
   rejected?.close();
 }

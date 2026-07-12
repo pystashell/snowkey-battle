@@ -1953,6 +1953,7 @@ select:focus-visible {
 .online-room-card .room-vs { align-items: start; }
 
 .online-seat {
+  position: relative;
   min-width: 0;
   min-height: 74px;
   padding: 9px;
@@ -1969,6 +1970,7 @@ select:focus-visible {
 
 .online-seat--berry { border-left-color: #d5414a; }
 .online-seat.is-self { outline: 3px solid rgba(255, 194, 54, 0.55); }
+.online-seat.has-remove-control .online-seat__identity { padding-right: 16px; }
 
 .online-seat__rank {
   width: 30px;
@@ -2006,8 +2008,9 @@ select:focus-visible {
 .online-seat__status em.is-away { color: #a26849; }
 
 .online-seat__status select {
+  flex: 1 1 auto;
   min-width: 0;
-  max-width: 105px;
+  max-width: none;
   height: 25px;
   border: 1px solid #b9c8c9;
   border-radius: 4px;
@@ -2017,25 +2020,33 @@ select:focus-visible {
   font-weight: 800;
 }
 
-.online-seat__remove-ai {
-  height: 25px;
-  padding: 0 6px;
-  border: 1px solid #d4a5a5;
-  border-radius: 4px;
+.online-seat__remove {
+  position: absolute;
+  z-index: 2;
+  top: -6px;
+  right: -6px;
+  width: 19px;
+  height: 19px;
+  padding: 0;
+  display: grid;
+  place-items: center;
+  border: 1px solid #cf9a9f;
+  border-radius: 50%;
   color: #9d3540;
   background: #fff7f4;
-  font-size: 8px;
+  box-shadow: 0 2px 0 rgba(86, 35, 43, 0.12);
+  font-size: 15px;
+  line-height: 1;
   font-weight: 900;
-  white-space: nowrap;
   cursor: pointer;
 }
 
-.online-seat__remove-ai:hover:not(:disabled) {
+.online-seat__remove:hover:not(:disabled) {
   color: white;
   background: #b9414d;
 }
 
-.online-seat__remove-ai:disabled {
+.online-seat__remove:disabled {
   opacity: 0.35;
   cursor: not-allowed;
 }
@@ -2185,6 +2196,7 @@ select:focus-visible {
 }
 
 .room-card--formation .roster-card {
+  position: relative;
   min-height: 94px;
   grid-template-columns: 46px minmax(72px, 1fr) minmax(100px, 118px);
   gap: 8px;
@@ -2231,23 +2243,24 @@ select:focus-visible {
   font-weight: 800;
 }
 
-.roster-card__ai-controls {
-  min-width: 0;
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  gap: 4px;
-}
-
 .roster-card__remove-ai {
-  height: 25px;
-  padding: 0 5px;
-  border: 1px solid #d4a5a5;
-  border-radius: 4px;
+  position: absolute;
+  z-index: 2;
+  top: -7px;
+  right: -7px;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  display: grid;
+  place-items: center;
+  border: 1px solid #cf9a9f;
+  border-radius: 50%;
   color: #9d3540;
   background: #fff7f4;
-  font-size: 8px;
+  box-shadow: 0 2px 0 rgba(86, 35, 43, 0.12);
+  font-size: 16px;
+  line-height: 1;
   font-weight: 900;
-  white-space: nowrap;
   cursor: pointer;
 }
 
@@ -2766,7 +2779,10 @@ select:focus-visible {
   }
   .roster-card__settings {
     display: grid;
+    grid-template-columns: 1fr;
   }
+  .online-seat__status { flex-wrap: wrap; }
+  .online-seat__status select { flex-basis: 100%; }
   .scoreboard--individual {
     min-height: 116px;
   }

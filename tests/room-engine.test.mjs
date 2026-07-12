@@ -257,6 +257,68 @@ test("the host can remove active AI seats while guests, humans, inactive seats, 
   assert.equal(duringMatch.code, "WRONG_STAGE");
 });
 
+test("only the host can remove another human and the vacated seat becomes steady AI", () => {
+  const engine = createEngine();
+  const firstGuest = join(engine, 1, 10);
+  const secondGuest = join(engine, 2, 11);
+  assert.equal(firstGuest.ok, true);
+  assert.equal(secondGuest.ok, true);
+
+  const guestAttempt = engine.handleCommand(
+    "guest-1",
+    { op: "lobby.remove_player", playerId: secondGuest.playerId },
+    12,
+  );
+  assert.equal(guestAttempt.ok, false);
+  assert.equal(guestAttempt.code, "HOST_ONLY");
+
+  const selfAttempt = engine.handleCommand(
+    HOST_SESSION,
+    { op: "lobby.remove_player", playerId: "pine-0" },
+    13,
+  );
+  assert.equal(selfAttempt.ok, false);
+  assert.equal(selfAttempt.code, "CANNOT_REMOVE_HOST");
+
+  const ai = engine.snapshot(13).players.find((player) => player.controller.kind === "ai");
+  assert.ok(ai);
+  const aiAttempt = engine.handleCommand(
+    HOST_SESSION,
+    { op: "lobby.remove_player", playerId: ai.id },
+    14,
+  );
+  assert.equal(aiAttempt.ok, false);
+  assert.equal(aiAttempt.code, "NOT_A_HUMAN");
+
+  assert.equal(engine.sessionIdForPlayer(secondGuest.playerId), "guest-2");
+  const removed = engine.handleCommand(
+    HOST_SESSION,
+    { op: "lobby.remove_player", playerId: secondGuest.playerId },
+    15,
+  );
+  assert.equal(removed.ok, true);
+  assert.deepEqual(removed.events, [{ type: "player.replaced_by_ai", playerId: secondGuest.playerId }]);
+
+  const snapshot = engine.snapshot(15);
+  const replacement = snapshot.players.find((player) => player.id === secondGuest.playerId);
+  assert.equal(snapshot.humanCount, 2);
+  assert.equal(replacement?.controller.kind, "ai");
+  assert.equal(replacement?.controller.level, "steady");
+  assert.equal(engine.sessionIdForPlayer(secondGuest.playerId), null);
+  const removedClientCommand = engine.handleCommand("guest-2", { op: "sync.request" }, 16);
+  assert.equal(removedClientCommand.ok, false);
+  assert.equal(removedClientCommand.code, "PLAYER_NOT_FOUND");
+
+  const startedAt = start(engine, ["guest-1"], 20);
+  const duringMatch = engine.handleCommand(
+    HOST_SESSION,
+    { op: "lobby.remove_player", playerId: firstGuest.playerId },
+    startedAt + 1,
+  );
+  assert.equal(duringMatch.ok, false);
+  assert.equal(duringMatch.code, "WRONG_STAGE");
+});
+
 test("initial, reactivated, and departed-human AI seats default to steady", () => {
   const engine = createEngine();
   let snapshot = engine.snapshot(0);
@@ -401,6 +463,23 @@ test("host transfer includes a human inside the reconnect grace period", () => {
   snapshot = engine.snapshot(30, "guest-1");
   assert.equal(snapshot.hostPlayerId, guest.playerId);
   assert.equal(snapshot.selfPlayerId, guest.playerId);
+});
+
+test("host succession always follows human join order even when the next human is disconnected", () => {
+  const engine = createEngine();
+  const firstGuest = join(engine, 1, 10);
+  const secondGuest = join(engine, 2, 11);
+  assert.equal(firstGuest.ok, true);
+  assert.equal(secondGuest.ok, true);
+  assert.equal(engine.disconnect("guest-1", 12).ok, true);
+
+  assert.equal(engine.handleCommand(HOST_SESSION, { op: "presence.leave" }, 13).ok, true);
+  const snapshot = engine.snapshot(13);
+  assert.equal(snapshot.hostPlayerId, firstGuest.playerId);
+  assert.equal(snapshot.players.find((player) => player.id === firstGuest.playerId)?.controller.kind, "human");
+  assert.equal(snapshot.players.find((player) => player.id === firstGuest.playerId)?.controller.isHost, true);
+  assert.equal(snapshot.players.find((player) => player.id === firstGuest.playerId)?.controller.connected, false);
+  assert.equal(snapshot.players.find((player) => player.id === secondGuest.playerId)?.controller.isHost, false);
 });
 
 test("the last explicit human departure leaves no owner for the worker to retire", () => {

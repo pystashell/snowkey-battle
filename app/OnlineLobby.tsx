@@ -58,6 +58,7 @@ function OnlineSeat({
   isHost,
   teamSize,
   connected,
+  onLeave,
   sendCommand,
 }: {
   player: RoomPlayer;
@@ -65,6 +66,7 @@ function OnlineSeat({
   isHost: boolean;
   teamSize: number;
   connected: boolean;
+  onLeave: () => void;
   sendCommand: (command: RoomCommand) => void;
 }) {
   const { language, text } = useLanguage();
@@ -74,8 +76,34 @@ function OnlineSeat({
     ? ENGLISH_AI_NAMES[player.id] ?? player.name
     : player.name;
   const canMove = isHost || isSelf;
+  const showRemove = isHost;
+  const canRemove = connected && (isSelf || controller.kind === "human" || teamSize > 1);
+  const removeTitle = isSelf
+    ? text("离开房间", "Leave room")
+    : controller.kind === "human"
+    ? text("移除玩家", "Remove player")
+    : teamSize > 1
+      ? text("移除 AI", "Remove AI")
+      : text("每队至少保留一名队员", "Each team needs at least one player");
   return (
-    <div className={`online-seat online-seat--${player.team}${isSelf ? " is-self" : ""}`}>
+    <div className={`online-seat online-seat--${player.team}${isSelf ? " is-self" : ""}${showRemove ? " has-remove-control" : ""}`}>
+      {showRemove && (
+        <button
+          className="online-seat__remove"
+          type="button"
+          disabled={!canRemove}
+          onClick={() => {
+            if (isSelf) onLeave();
+            else sendCommand(controller.kind === "ai"
+              ? { op: "lobby.remove_ai", playerId: player.id }
+              : { op: "lobby.remove_player", playerId: player.id });
+          }}
+          title={removeTitle}
+          aria-label={isSelf
+            ? text("离开房间", "Leave room")
+            : text(`移除 ${player.name}`, `Remove ${playerDisplayName}`)}
+        >−</button>
+      )}
       <span className="online-seat__rank">{player.position === 0 ? text("前", "F") : player.position + 1}</span>
       <span className="online-seat__identity">
         <strong>{playerDisplayName}{isSelf ? text("（你）", " (You)") : ""}</strong>
@@ -94,31 +122,20 @@ function OnlineSeat({
                 : text("未准备", "Not ready")}
           </em>
         ) : (
-          <>
-            <select
-              value={controller.level}
-              disabled={!isHost || !connected}
-              onChange={(event) => sendCommand({
-                op: "lobby.set_ai_level",
-                playerId: player.id,
-                level: event.target.value as AiLevel,
-              })}
-              aria-label={text(`${player.name} AI 强度`, `${playerDisplayName} AI difficulty`)}
-            >
-              {(Object.keys(AI_LABELS) as AiLevel[]).map((level) => (
-                <option key={level} value={level}>{text(AI_LABELS[level].zh, AI_LABELS[level].en)}</option>
-              ))}
-            </select>
-            {isHost && (
-              <button
-                className="online-seat__remove-ai"
-                type="button"
-                disabled={!connected || teamSize <= 1}
-                onClick={() => sendCommand({ op: "lobby.remove_ai", playerId: player.id })}
-                aria-label={text(`移除 ${player.name}`, `Remove ${playerDisplayName}`)}
-              >{text("移除 AI", "Remove AI")}</button>
-            )}
-          </>
+          <select
+            value={controller.level}
+            disabled={!isHost || !connected}
+            onChange={(event) => sendCommand({
+              op: "lobby.set_ai_level",
+              playerId: player.id,
+              level: event.target.value as AiLevel,
+            })}
+            aria-label={text(`${player.name} AI 强度`, `${playerDisplayName} AI difficulty`)}
+          >
+            {(Object.keys(AI_LABELS) as AiLevel[]).map((level) => (
+              <option key={level} value={level}>{text(AI_LABELS[level].zh, AI_LABELS[level].en)}</option>
+            ))}
+          </select>
         )}
         {canMove && (
           <span className="online-seat__moves">
@@ -396,6 +413,7 @@ export function OnlineLobby(props: OnlineLobbyProps) {
                     isHost={isHost}
                     teamSize={snapshot.config.pineSize}
                     connected={connected}
+                    onLeave={onLeave}
                     sendCommand={sendCommand}
                   />
                 ))}
@@ -411,6 +429,7 @@ export function OnlineLobby(props: OnlineLobbyProps) {
                     isHost={isHost}
                     teamSize={snapshot.config.berrySize}
                     connected={connected}
+                    onLeave={onLeave}
                     sendCommand={sendCommand}
                   />
                 ))}

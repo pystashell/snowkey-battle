@@ -153,6 +153,7 @@ export type RoomCommand =
   | { op: "lobby.set_config"; config: Partial<RoomConfig> }
   | { op: "lobby.set_ai_level"; playerId: string; level: AiLevel }
   | { op: "lobby.remove_ai"; playerId: string }
+  | { op: "lobby.remove_player"; playerId: string }
   | { op: "match.start" }
   | { op: "match.restart" }
   | { op: "type.key"; key: string }

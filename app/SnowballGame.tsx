@@ -191,6 +191,7 @@ const ENGLISH_ROOM_ERRORS: Record<string, string> = {
   ROOM_FULL: "That room already has 8 human players.",
   NAME_TAKEN: "That name is already in use in this room.",
   MATCH_IN_PROGRESS: "This match is already in progress.",
+  KICKED_FROM_ROOM: "The host removed you from the room.",
   WRONG_STAGE: "That action is not available right now.",
   NOT_HOST: "Only the host can change that setting.",
   TEAM_HAS_HUMANS: "The team cannot be made smaller while a human occupies that seat.",
@@ -705,8 +706,22 @@ function RosterCard({
 }) {
   const { language, text } = useLanguage();
   const palette = getPlayerPalette(player);
+  const canRemove = total > 1;
+  const removeTitle = canRemove
+    ? text("移除 AI", "Remove AI")
+    : text("每队至少保留一名队员", "Each team needs at least one player");
   return (
-    <div className={`roster-card roster-card--${player.team}${player.isUser ? " is-you" : ""}`}>
+    <div className={`roster-card roster-card--${player.team}${player.isUser ? " is-you" : " is-ai"}`}>
+      {!player.isUser && (
+        <button
+          className="roster-card__remove-ai"
+          type="button"
+          disabled={!canRemove}
+          onClick={onRemove}
+          title={removeTitle}
+          aria-label={text(`移除 ${player.name}`, `Remove ${player.name}`)}
+        >−</button>
+      )}
       <span
         className="roster-card__avatar"
         style={
@@ -734,24 +749,15 @@ function RosterCard({
         {player.isUser ? (
           <em>{text("真人", "Human")}</em>
         ) : (
-          <span className="roster-card__ai-controls">
-            <select
-              value={player.aiLevel}
-              onChange={(event) => onLevelChange(event.target.value as AiLevel)}
-              aria-label={text(`${player.name} AI 强度`, `${player.name} AI difficulty`)}
-            >
-              {Object.entries(AI_LEVELS).map(([value, profile]) => (
-                <option key={value} value={value}>{language === "zh" ? profile.label : profile.labelEn}</option>
-              ))}
-            </select>
-            <button
-              className="roster-card__remove-ai"
-              type="button"
-              disabled={total <= 1}
-              onClick={onRemove}
-              aria-label={text(`移除 ${player.name}`, `Remove ${player.name}`)}
-            >{text("移除 AI", "Remove AI")}</button>
-          </span>
+          <select
+            value={player.aiLevel}
+            onChange={(event) => onLevelChange(event.target.value as AiLevel)}
+            aria-label={text(`${player.name} AI 强度`, `${player.name} AI difficulty`)}
+          >
+            {Object.entries(AI_LEVELS).map(([value, profile]) => (
+              <option key={value} value={value}>{language === "zh" ? profile.label : profile.labelEn}</option>
+            ))}
+          </select>
         )}
         <span className="formation-buttons">
           <button onClick={() => onMove(-1)} disabled={index === 0} aria-label={text(`${player.name} 前移`, `Move ${player.name} forward`)}>{text("前", "Forward")}</button>
