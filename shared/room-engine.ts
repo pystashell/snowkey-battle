@@ -14,6 +14,7 @@ import type {
   Team,
   WordbookId,
 } from "./game-protocol";
+import { DEFAULT_AI_LEVEL } from "./game-protocol.ts";
 import {
   FROST_WORD_POOL_SIZE,
   buildWordPools,
@@ -156,14 +157,14 @@ type DueTask = {
 };
 
 const SEATS: SeatSpec[] = [
-  { id: "pine-0", team: "pine", slot: 0, name: "小雪球", badge: "雪", aiLevel: "steady" },
-  { id: "pine-1", team: "pine", slot: 1, name: "阿澄", badge: "澄", aiLevel: "rookie" },
-  { id: "pine-2", team: "pine", slot: 2, name: "米糕", badge: "糕", aiLevel: "steady" },
-  { id: "pine-3", team: "pine", slot: 3, name: "小北", badge: "北", aiLevel: "expert" },
-  { id: "berry-0", team: "berry", slot: 0, name: "团子", badge: "团", aiLevel: "rookie" },
-  { id: "berry-1", team: "berry", slot: 1, name: "柚子", badge: "柚", aiLevel: "steady" },
-  { id: "berry-2", team: "berry", slot: 2, name: "阿满", badge: "满", aiLevel: "expert" },
-  { id: "berry-3", team: "berry", slot: 3, name: "星星", badge: "星", aiLevel: "steady" },
+  { id: "pine-0", team: "pine", slot: 0, name: "小雪球", badge: "雪", aiLevel: DEFAULT_AI_LEVEL },
+  { id: "pine-1", team: "pine", slot: 1, name: "阿澄", badge: "澄", aiLevel: DEFAULT_AI_LEVEL },
+  { id: "pine-2", team: "pine", slot: 2, name: "米糕", badge: "糕", aiLevel: DEFAULT_AI_LEVEL },
+  { id: "pine-3", team: "pine", slot: 3, name: "小北", badge: "北", aiLevel: DEFAULT_AI_LEVEL },
+  { id: "berry-0", team: "berry", slot: 0, name: "团子", badge: "团", aiLevel: DEFAULT_AI_LEVEL },
+  { id: "berry-1", team: "berry", slot: 1, name: "柚子", badge: "柚", aiLevel: DEFAULT_AI_LEVEL },
+  { id: "berry-2", team: "berry", slot: 2, name: "阿满", badge: "满", aiLevel: DEFAULT_AI_LEVEL },
+  { id: "berry-3", team: "berry", slot: 3, name: "星星", badge: "星", aiLevel: DEFAULT_AI_LEVEL },
 ];
 
 const AI_LEVELS: Record<AiLevel, { reaction: [number, number]; charMs: [number, number] }> = {
@@ -293,6 +294,19 @@ function makeSeat(spec: SeatSpec, active: boolean): InternalPlayer {
   };
 }
 
+function movePlayerToTeamBack(players: InternalPlayer[], player: InternalPlayer) {
+  const teammates = players
+    .filter((candidate) => candidate.active && candidate.team === player.team)
+    .sort((left, right) => left.position - right.position);
+  const finalPosition = teammates.length - 1;
+  if (player.position >= finalPosition) return;
+  const previousPosition = player.position;
+  for (const teammate of teammates) {
+    if (teammate.id !== player.id && teammate.position > previousPosition) teammate.position -= 1;
+  }
+  player.position = finalPosition;
+}
+
 function defaultConfig(): RoomConfig {
   return {
     pineSize: 3,
@@ -384,6 +398,7 @@ export class RoomEngine {
     host.sessionId = input.sessionId;
     host.reconnectToken = input.reconnectToken;
     host.joinOrder = 1;
+    movePlayerToTeamBack(players, host);
     const state: EngineState = {
       code,
       revision: 1,
@@ -502,6 +517,7 @@ export class RoomEngine {
     if (!seat.active) this.activateSeat(seat);
     seat.name = playerName;
     seat.badge = Array.from(seat.name)[0] ?? "友";
+    seat.fallbackAiLevel = DEFAULT_AI_LEVEL;
     seat.controller = { kind: "human", connected: true, ready: false, isHost: false };
     seat.sessionId = input.sessionId;
     seat.reconnectToken = input.reconnectToken;
@@ -514,6 +530,7 @@ export class RoomEngine {
     seat.bestCombo = 0;
     seat.lastClaimAt = 0;
     seat.frozenUntil = 0;
+    movePlayerToTeamBack(this.state.players, seat);
     this.state.typingByPlayer[seat.id] = { buffer: "", targetWordId: null };
     this.reconcileAiNames();
     this.touch();
@@ -583,6 +600,8 @@ export class RoomEngine {
         return this.setConfig(player, command.config, events);
       case "lobby.set_ai_level":
         return this.setAiLevel(player, command.playerId, command.level, events);
+      case "lobby.remove_ai":
+        return this.removeAi(player, command.playerId, events);
       case "match.start":
         return this.startMatch(player, now, events);
       case "match.restart":
@@ -800,6 +819,8 @@ export class RoomEngine {
   private activateSeat(player: InternalPlayer) {
     const teammates = this.activePlayers(player.team);
     if (teammates.length >= MAX_TEAM_SIZE) return false;
+    player.fallbackAiLevel = DEFAULT_AI_LEVEL;
+    player.controller = { kind: "ai", level: DEFAULT_AI_LEVEL };
     player.active = true;
     player.position = teammates.length;
     player.health = player.maxHealth;
@@ -830,6 +851,7 @@ export class RoomEngine {
     this.resetSeatToAi(player);
     target.name = identity.name;
     target.badge = identity.badge;
+    target.fallbackAiLevel = DEFAULT_AI_LEVEL;
     target.controller = humanController;
     target.sessionId = identity.sessionId;
     target.reconnectToken = identity.reconnectToken;
@@ -837,6 +859,7 @@ export class RoomEngine {
     target.joinOrder = identity.joinOrder;
     target.health = target.maxHealth;
     target.frozenUntil = 0;
+    movePlayerToTeamBack(this.state.players, target);
     this.clearTyping(player.id);
     this.clearTyping(target.id);
     if (wasHost) this.setHost(target);
@@ -874,9 +897,8 @@ export class RoomEngine {
     if (!(next.snowfallLevel in SNOWFALL_PROFILES)) return this.failure("INVALID_SNOWFALL", "Unknown snowfall level.", events);
     for (const team of ["pine", "berry"] as const) {
       const desired = team === "pine" ? next.pineSize : next.berrySize;
-      const removed = this.activePlayers(team).filter((player) => player.position >= desired);
-      if (removed.some((player) => player.controller.kind === "human")) {
-        return this.failure("TEAM_HAS_HUMANS", "Move human players before shrinking their team.", events);
+      if (this.humanPlayers().filter((player) => player.team === team).length > desired) {
+        return this.failure("TEAM_HAS_HUMANS", "A team cannot be smaller than its human player count.", events);
       }
     }
     this.resizeTeam("pine", next.pineSize);
@@ -899,9 +921,9 @@ export class RoomEngine {
   private resizeTeam(team: Team, desired: number) {
     let active = this.activePlayers(team);
     while (active.length > desired) {
-      const removed = active[active.length - 1];
-      removed.active = false;
-      this.clearTyping(removed.id);
+      const removed = [...active].reverse().find((player) => player.controller.kind === "ai");
+      if (!removed) break;
+      this.deactivateAiSeat(removed);
       active = this.activePlayers(team);
     }
     while (active.length < desired) {
@@ -910,6 +932,34 @@ export class RoomEngine {
       this.activateSeat(seat);
       active = this.activePlayers(team);
     }
+  }
+
+  private deactivateAiSeat(player: InternalPlayer) {
+    const previousPosition = player.position;
+    const team = player.team;
+    player.fallbackAiLevel = DEFAULT_AI_LEVEL;
+    this.resetSeatToAi(player);
+    player.active = false;
+    this.clearTyping(player.id);
+    for (const teammate of this.activePlayers(team)) {
+      if (teammate.position > previousPosition) teammate.position -= 1;
+    }
+    const nextSize = this.activePlayers(team).length;
+    if (team === "pine") this.state.config.pineSize = nextSize;
+    else this.state.config.berrySize = nextSize;
+  }
+
+  private removeAi(actor: InternalPlayer, playerId: string, events: RoomEvent[]): EngineResult {
+    if (this.state.phase !== "lobby") return this.failure("WRONG_STAGE", "AI can only be removed in the lobby.", events);
+    if (actor.controller.kind !== "human" || !actor.controller.isHost) return this.failure("HOST_ONLY", "Only the host can remove AI players.", events);
+    const target = this.state.players.find((player) => player.active && player.id === playerId);
+    if (!target || target.controller.kind !== "ai") return this.failure("NOT_AN_AI", "The selected seat is not controlled by AI.", events);
+    if (this.activePlayers(target.team).length <= 1) return this.failure("MIN_TEAM_SIZE", "Each team must keep at least one player.", events);
+    this.deactivateAiSeat(target);
+    this.reconcileAiNames();
+    this.invalidateReadyStates();
+    this.touch();
+    return this.success(events);
   }
 
   private setAiLevel(actor: InternalPlayer, playerId: string, level: AiLevel, events: RoomEvent[]): EngineResult {

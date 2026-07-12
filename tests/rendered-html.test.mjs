@@ -39,6 +39,8 @@ test("server-renders the Chinese snow fighting game for a Chinese browser", asyn
   assert.match(html, /按阵型开战/);
   assert.match(html, /3(?:<!-- -->)? VS (?:<!-- -->)?3/);
   assert.match(html, /1 位真人 \+ (?:<!-- -->)?5(?:<!-- -->)? 位可调强度 AI/);
+  assert.match(html, /移除 AI/);
+  assert.match(html, /<option value="steady" selected="">熟练 AI<\/option>/);
   assert.match(html, /aria-label="雪松队人数"/);
   assert.match(html, /aria-label="红莓队人数"/);
   assert.match(html, /aria-label="选择单词册"/);
@@ -68,6 +70,8 @@ test("server-renders the complete English lobby for a non-Chinese browser", asyn
   assert.match(html, /<title>Riverbank Snow Battle/);
   assert.match(html, /Race to type English words/);
   assert.match(html, /Online with Friends/);
+  assert.match(html, /Remove AI/);
+  assert.match(html, /<option value="steady" selected="">Skilled AI<\/option>/);
   assert.match(html, /Start with This Formation/);
   assert.match(html, /Pine team size/);
   assert.match(html, /CET-4 · Large Wordbook/);

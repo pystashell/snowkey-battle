@@ -3,6 +3,7 @@ export const PLAYER_MAX_HEALTH = 100 as const;
 
 export type Team = "pine" | "berry";
 export type AiLevel = "rookie" | "steady" | "expert";
+export const DEFAULT_AI_LEVEL: AiLevel = "steady";
 export type SnowfallLevel = "light" | "classic" | "blizzard";
 export type SnowWordKind = "normal" | "frost";
 export type WordbookId =
@@ -151,6 +152,7 @@ export type RoomCommand =
   | { op: "lobby.move"; playerId: string; direction: -1 | 1 }
   | { op: "lobby.set_config"; config: Partial<RoomConfig> }
   | { op: "lobby.set_ai_level"; playerId: string; level: AiLevel }
+  | { op: "lobby.remove_ai"; playerId: string }
   | { op: "match.start" }
   | { op: "match.restart" }
   | { op: "type.key"; key: string }

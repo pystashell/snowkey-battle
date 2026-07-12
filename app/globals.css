@@ -2017,6 +2017,29 @@ select:focus-visible {
   font-weight: 800;
 }
 
+.online-seat__remove-ai {
+  height: 25px;
+  padding: 0 6px;
+  border: 1px solid #d4a5a5;
+  border-radius: 4px;
+  color: #9d3540;
+  background: #fff7f4;
+  font-size: 8px;
+  font-weight: 900;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.online-seat__remove-ai:hover:not(:disabled) {
+  color: white;
+  background: #b9414d;
+}
+
+.online-seat__remove-ai:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+
 .online-seat__moves { margin-left: auto; display: inline-flex; gap: 3px; }
 .online-seat__moves button {
   width: 26px;
@@ -2206,6 +2229,36 @@ select:focus-visible {
   background: #fffdf7;
   font-size: 9px;
   font-weight: 800;
+}
+
+.roster-card__ai-controls {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 4px;
+}
+
+.roster-card__remove-ai {
+  height: 25px;
+  padding: 0 5px;
+  border: 1px solid #d4a5a5;
+  border-radius: 4px;
+  color: #9d3540;
+  background: #fff7f4;
+  font-size: 8px;
+  font-weight: 900;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.roster-card__remove-ai:hover:not(:disabled) {
+  color: white;
+  background: #b9414d;
+}
+
+.roster-card__remove-ai:disabled {
+  opacity: 0.32;
+  cursor: not-allowed;
 }
 
 .roster-card__settings em {

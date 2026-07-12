@@ -94,20 +94,31 @@ function OnlineSeat({
                 : text("未准备", "Not ready")}
           </em>
         ) : (
-          <select
-            value={controller.level}
-            disabled={!isHost || !connected}
-            onChange={(event) => sendCommand({
-              op: "lobby.set_ai_level",
-              playerId: player.id,
-              level: event.target.value as AiLevel,
-            })}
-            aria-label={text(`${player.name} AI 强度`, `${playerDisplayName} AI difficulty`)}
-          >
-            {(Object.keys(AI_LABELS) as AiLevel[]).map((level) => (
-              <option key={level} value={level}>{text(AI_LABELS[level].zh, AI_LABELS[level].en)}</option>
-            ))}
-          </select>
+          <>
+            <select
+              value={controller.level}
+              disabled={!isHost || !connected}
+              onChange={(event) => sendCommand({
+                op: "lobby.set_ai_level",
+                playerId: player.id,
+                level: event.target.value as AiLevel,
+              })}
+              aria-label={text(`${player.name} AI 强度`, `${playerDisplayName} AI difficulty`)}
+            >
+              {(Object.keys(AI_LABELS) as AiLevel[]).map((level) => (
+                <option key={level} value={level}>{text(AI_LABELS[level].zh, AI_LABELS[level].en)}</option>
+              ))}
+            </select>
+            {isHost && (
+              <button
+                className="online-seat__remove-ai"
+                type="button"
+                disabled={!connected || teamSize <= 1}
+                onClick={() => sendCommand({ op: "lobby.remove_ai", playerId: player.id })}
+                aria-label={text(`移除 ${player.name}`, `Remove ${playerDisplayName}`)}
+              >{text("移除 AI", "Remove AI")}</button>
+            )}
+          </>
         )}
         {canMove && (
           <span className="online-seat__moves">

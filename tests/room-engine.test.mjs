@@ -65,6 +65,7 @@ function typeWord(engine, sessionId, word, now) {
 test("creates a six-character room with eight stable seats and admits at most eight humans", () => {
   const engine = createEngine();
   assert.equal(engine.snapshot(0, HOST_SESSION).selfPlayerId, "pine-0");
+  assert.equal(engine.snapshot(0, HOST_SESSION).players.find((player) => player.id === "pine-0")?.position, 2);
   assert.equal(engine.serialize().state.players.length, 8);
 
   for (let index = 1; index <= 7; index += 1) {
@@ -118,10 +119,11 @@ test("a guest can move their own seat but cannot reorder another player", () => 
   const engine = createEngine();
   const guest = join(engine, 1, 10);
   assert.equal(guest.ok, true);
+  assert.equal(engine.snapshot(10).players.find((player) => player.id === guest.playerId)?.position, 2);
 
   const ownMove = engine.handleCommand(
     "guest-1",
-    { op: "lobby.move", playerId: guest.playerId, direction: 1 },
+    { op: "lobby.move", playerId: guest.playerId, direction: -1 },
     11,
   );
   assert.equal(ownMove.ok, true);
@@ -140,33 +142,149 @@ test("a guest can move their own seat but cannot reorder another player", () => 
   assert.deepEqual(engine.snapshot(12).players.map((player) => [player.id, player.position]), before);
 });
 
-test("host can configure an asymmetric 1v4 room but cannot shrink over a human", () => {
+test("host can shrink a team around a human in the last position but not below its human count", () => {
   const engine = createEngine();
-  const changed = engine.handleCommand(
+  let changed = engine.handleCommand(
     HOST_SESSION,
-    { op: "lobby.set_config", config: { pineSize: 1, berrySize: 4, snowfallLevel: "light" } },
+    { op: "lobby.set_config", config: { pineSize: 2, berrySize: 4, snowfallLevel: "light" } },
     10,
   );
   assert.equal(changed.ok, true);
-  const snapshot = engine.snapshot(10);
-  assert.equal(snapshot.players.filter((player) => player.team === "pine").length, 1);
+  let snapshot = engine.snapshot(10);
+  assert.equal(snapshot.players.filter((player) => player.team === "pine").length, 2);
   assert.equal(snapshot.players.filter((player) => player.team === "berry").length, 4);
+  assert.equal(snapshot.players.find((player) => player.id === "pine-0")?.position, 1);
 
-  const guest = join(engine, 1, 11);
-  assert.equal(guest.ok, true);
-  const moved = engine.handleCommand(
+  changed = engine.handleCommand(
     HOST_SESSION,
-    { op: "lobby.move", playerId: guest.playerId, direction: 1 },
+    { op: "lobby.set_config", config: { pineSize: 1 } },
     11,
   );
-  assert.equal(moved.ok, true);
+  assert.equal(changed.ok, true);
+  snapshot = engine.snapshot(11);
+  assert.equal(snapshot.players.filter((player) => player.team === "pine").length, 1);
+  assert.equal(snapshot.players.find((player) => player.id === "pine-0")?.position, 0);
+
+  const guest = join(engine, 1, 12);
+  assert.equal(guest.ok, true);
+  assert.equal(engine.handleCommand("guest-1", { op: "lobby.set_team", team: "pine" }, 13).ok, true);
+  snapshot = engine.snapshot(13, "guest-1");
+  assert.equal(snapshot.players.filter((player) => player.team === "pine" && player.controller.kind === "human").length, 2);
+  assert.equal(
+    snapshot.players.find((player) => player.id === snapshot.selfPlayerId)?.position,
+    snapshot.players.filter((player) => player.team === "pine").length - 1,
+  );
+
   const rejected = engine.handleCommand(
     HOST_SESSION,
-    { op: "lobby.set_config", config: { berrySize: 1 } },
-    12,
+    { op: "lobby.set_config", config: { pineSize: 1 } },
+    14,
   );
   assert.equal(rejected.ok, false);
   assert.equal(rejected.code, "TEAM_HAS_HUMANS");
+});
+
+test("the host can remove active AI seats while guests, humans, inactive seats, and last seats are protected", () => {
+  const engine = createEngine();
+  const guest = join(engine, 1, 10);
+  assert.equal(guest.ok, true);
+
+  let snapshot = engine.snapshot(10);
+  const removable = snapshot.players.find((player) => player.team === "pine" && player.position === 0);
+  assert.equal(removable?.controller.kind, "ai");
+
+  const guestAttempt = engine.handleCommand(
+    "guest-1",
+    { op: "lobby.remove_ai", playerId: removable.id },
+    11,
+  );
+  assert.equal(guestAttempt.ok, false);
+  assert.equal(guestAttempt.code, "HOST_ONLY");
+
+  const removed = engine.handleCommand(
+    HOST_SESSION,
+    { op: "lobby.remove_ai", playerId: removable.id },
+    12,
+  );
+  assert.equal(removed.ok, true);
+  snapshot = engine.snapshot(12);
+  const pine = snapshot.players.filter((player) => player.team === "pine").sort((a, b) => a.position - b.position);
+  assert.equal(snapshot.config.pineSize, 2);
+  assert.deepEqual(pine.map((player) => player.position), [0, 1]);
+  assert.equal(pine.at(-1)?.id, "pine-0");
+
+  const inactiveAttempt = engine.handleCommand(
+    HOST_SESSION,
+    { op: "lobby.remove_ai", playerId: removable.id },
+    13,
+  );
+  assert.equal(inactiveAttempt.ok, false);
+  assert.equal(inactiveAttempt.code, "NOT_AN_AI");
+
+  const humanAttempt = engine.handleCommand(
+    HOST_SESSION,
+    { op: "lobby.remove_ai", playerId: guest.playerId },
+    14,
+  );
+  assert.equal(humanAttempt.ok, false);
+  assert.equal(humanAttempt.code, "NOT_AN_AI");
+
+  assert.equal(engine.handleCommand(HOST_SESSION, { op: "lobby.set_config", config: { berrySize: 1 } }, 15).ok, true);
+  snapshot = engine.snapshot(15);
+  const berryOnly = snapshot.players.find((player) => player.team === "berry");
+  assert.equal(berryOnly?.controller.kind, "human");
+  assert.equal(engine.handleCommand("guest-1", { op: "lobby.set_team", team: "pine" }, 16).ok, true);
+  snapshot = engine.snapshot(16);
+  const lastAi = snapshot.players.find((player) => player.team === "berry" && player.controller.kind === "ai");
+  assert.ok(lastAi);
+  const lastSeatAttempt = engine.handleCommand(
+    HOST_SESSION,
+    { op: "lobby.remove_ai", playerId: lastAi.id },
+    17,
+  );
+  assert.equal(lastSeatAttempt.ok, false);
+  assert.equal(lastSeatAttempt.code, "MIN_TEAM_SIZE");
+
+  const startedAt = start(engine, ["guest-1"], 20);
+  const playingAi = engine.snapshot(startedAt).players.find((player) => player.controller.kind === "ai");
+  assert.ok(playingAi);
+  const duringMatch = engine.handleCommand(
+    HOST_SESSION,
+    { op: "lobby.remove_ai", playerId: playingAi.id },
+    startedAt + 1,
+  );
+  assert.equal(duringMatch.ok, false);
+  assert.equal(duringMatch.code, "WRONG_STAGE");
+});
+
+test("initial, reactivated, and departed-human AI seats default to steady", () => {
+  const engine = createEngine();
+  let snapshot = engine.snapshot(0);
+  assert.ok(snapshot.players
+    .filter((player) => player.controller.kind === "ai")
+    .every((player) => player.controller.level === "steady"));
+
+  const berryTail = snapshot.players
+    .filter((player) => player.team === "berry" && player.controller.kind === "ai")
+    .sort((a, b) => b.position - a.position)[0];
+  assert.ok(berryTail);
+  assert.equal(engine.handleCommand(
+    HOST_SESSION,
+    { op: "lobby.set_ai_level", playerId: berryTail.id, level: "expert" },
+    1,
+  ).ok, true);
+  assert.equal(engine.handleCommand(HOST_SESSION, { op: "lobby.set_config", config: { berrySize: 2 } }, 2).ok, true);
+  assert.equal(engine.handleCommand(HOST_SESSION, { op: "lobby.set_config", config: { berrySize: 3 } }, 3).ok, true);
+  snapshot = engine.snapshot(3);
+  assert.equal(snapshot.players.find((player) => player.id === berryTail.id)?.controller.level, "steady");
+
+  const guest = join(engine, 1, 4);
+  assert.equal(guest.ok, true);
+  assert.equal(engine.handleCommand("guest-1", { op: "presence.leave" }, 5).ok, true);
+  snapshot = engine.snapshot(5);
+  const replacement = snapshot.players.find((player) => player.id === guest.playerId);
+  assert.equal(replacement?.controller.kind, "ai");
+  assert.equal(replacement?.controller.level, "steady");
 });
 
 test("join with the same credentials reconnects to the same seat during the grace period", () => {
@@ -174,6 +292,8 @@ test("join with the same credentials reconnects to the same seat during the grac
   const first = join(engine, 1, 10);
   assert.equal(first.ok, true);
   const playerId = first.playerId;
+  const originalPosition = engine.snapshot(10).players.find((player) => player.id === playerId)?.position;
+  assert.equal(originalPosition, 2);
 
   const disconnected = engine.disconnect("guest-1", 20);
   assert.equal(disconnected.ok, true);
@@ -189,6 +309,7 @@ test("join with the same credentials reconnects to the same seat during the grac
   assert.equal(resumed.resumed, true);
   assert.equal(resumed.playerId, playerId);
   assert.equal(resumed.snapshot.players.find((player) => player.id === playerId)?.controller.kind, "human");
+  assert.equal(resumed.snapshot.players.find((player) => player.id === playerId)?.position, originalPosition);
   assert.equal(engine.nextDueAt(), null);
 
   const wrongToken = engine.join({
@@ -216,6 +337,7 @@ test("a disconnected human is replaced by AI exactly at 60 seconds", () => {
   assert.deepEqual(due.events[0], { type: "player.replaced_by_ai", playerId: joined.playerId });
   const replacement = engine.snapshot(60_020).players.find((player) => player.id === joined.playerId);
   assert.equal(replacement?.controller.kind, "ai");
+  assert.equal(replacement?.controller.level, "steady");
   assert.equal(replacement?.name, "团子");
   assert.equal(replacement?.badge, "团");
 });
@@ -319,6 +441,7 @@ test("switching teams keeps the human name and gives the vacated AI a unique nam
   const snapshot = engine.snapshot(5, HOST_SESSION);
   const self = snapshot.players.find((player) => player.id === snapshot.selfPlayerId);
   assert.equal(self?.name, "小雪球");
+  assert.equal(self?.position, snapshot.players.filter((player) => player.team === "berry").length - 1);
   const names = snapshot.players.map((player) => player.name.toLowerCase());
   assert.equal(new Set(names).size, names.length);
   assert.equal(snapshot.players.find((player) => player.id === "pine-0")?.name, "小雪球AI");
@@ -590,6 +713,11 @@ test("knocking out an attacker preserves an in-flight snowball but cancels every
     20,
   );
   assert.equal(configured.ok, true);
+  assert.equal(engine.handleCommand(
+    HOST_SESSION,
+    { op: "lobby.move", playerId: "pine-0", direction: -1 },
+    21,
+  ).ok, true);
   const startedAt = start(engine, ["guest-1"], 100);
   const availableWords = engine.snapshot(startedAt).words.map((word) => word.text);
   assert.ok(availableWords.length >= 4);

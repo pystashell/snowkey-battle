@@ -17,9 +17,11 @@ import type { UiLanguage } from "./language";
 import { useRoomSocket } from "./useRoomSocket";
 import { WORD_BOOKS, WORD_BOOK_OPTIONS, type WordbookId } from "./wordbooks";
 import {
+  DEFAULT_AI_LEVEL,
   isRoomCode,
   PLAYER_MAX_HEALTH,
   sanitizeRoomCode,
+  type AiLevel,
   type RoomEvent,
   type RoomPlayer,
   type RoomSnapshot,
@@ -35,7 +37,6 @@ import { MAX_WORD_LENGTH, wordSpawnRange } from "../shared/word-rules";
 
 type Team = "pine" | "berry";
 type Stage = "lobby" | "countdown" | "playing" | "paused" | "ended";
-type AiLevel = "rookie" | "steady" | "expert";
 type SnowfallLevel = "light" | "classic" | "blizzard";
 type GameMode = "local" | "online";
 
@@ -266,7 +267,7 @@ const PLAYER_SEEDS: Array<Omit<Player, "active" | "position" | "health" | "claim
     team: "pine",
     badge: "澄",
     slot: 1,
-    aiLevel: "rookie",
+    aiLevel: DEFAULT_AI_LEVEL,
     maxHealth: PLAYER_MAX_HEALTH,
   },
   {
@@ -275,7 +276,7 @@ const PLAYER_SEEDS: Array<Omit<Player, "active" | "position" | "health" | "claim
     team: "pine",
     badge: "糕",
     slot: 2,
-    aiLevel: "steady",
+    aiLevel: DEFAULT_AI_LEVEL,
     maxHealth: PLAYER_MAX_HEALTH,
   },
   {
@@ -284,7 +285,7 @@ const PLAYER_SEEDS: Array<Omit<Player, "active" | "position" | "health" | "claim
     team: "pine",
     badge: "北",
     slot: 3,
-    aiLevel: "expert",
+    aiLevel: DEFAULT_AI_LEVEL,
     maxHealth: PLAYER_MAX_HEALTH,
   },
   {
@@ -293,7 +294,7 @@ const PLAYER_SEEDS: Array<Omit<Player, "active" | "position" | "health" | "claim
     team: "berry",
     badge: "团",
     slot: 0,
-    aiLevel: "rookie",
+    aiLevel: DEFAULT_AI_LEVEL,
     maxHealth: PLAYER_MAX_HEALTH,
   },
   {
@@ -302,7 +303,7 @@ const PLAYER_SEEDS: Array<Omit<Player, "active" | "position" | "health" | "claim
     team: "berry",
     badge: "柚",
     slot: 1,
-    aiLevel: "steady",
+    aiLevel: DEFAULT_AI_LEVEL,
     maxHealth: PLAYER_MAX_HEALTH,
   },
   {
@@ -311,7 +312,7 @@ const PLAYER_SEEDS: Array<Omit<Player, "active" | "position" | "health" | "claim
     team: "berry",
     badge: "满",
     slot: 2,
-    aiLevel: "expert",
+    aiLevel: DEFAULT_AI_LEVEL,
     maxHealth: PLAYER_MAX_HEALTH,
   },
   {
@@ -320,7 +321,7 @@ const PLAYER_SEEDS: Array<Omit<Player, "active" | "position" | "health" | "claim
     team: "berry",
     badge: "星",
     slot: 3,
-    aiLevel: "steady",
+    aiLevel: DEFAULT_AI_LEVEL,
     maxHealth: PLAYER_MAX_HEALTH,
   },
 ];
@@ -396,10 +397,15 @@ function createInitialPlayers(pineCount = 3, berryCount = 3): Player[] {
   return PLAYER_SEEDS.map((seed) => {
     const count = seed.team === "pine" ? pineCount : berryCount;
     const active = seed.slot < count;
+    const position = seed.team === "pine" && active
+      ? seed.isUser
+        ? count - 1
+        : seed.slot - 1
+      : seed.slot;
     return {
       ...seed,
       active,
-      position: seed.slot,
+      position,
       health: seed.maxHealth,
       claims: 0,
       damage: 0,
@@ -688,12 +694,14 @@ function RosterCard({
   total,
   onMove,
   onLevelChange,
+  onRemove,
 }: {
   player: Player;
   index: number;
   total: number;
   onMove: (direction: -1 | 1) => void;
   onLevelChange: (level: AiLevel) => void;
+  onRemove: () => void;
 }) {
   const { language, text } = useLanguage();
   const palette = getPlayerPalette(player);
@@ -726,15 +734,24 @@ function RosterCard({
         {player.isUser ? (
           <em>{text("真人", "Human")}</em>
         ) : (
-          <select
-            value={player.aiLevel}
-            onChange={(event) => onLevelChange(event.target.value as AiLevel)}
-            aria-label={text(`${player.name} AI 强度`, `${player.name} AI difficulty`)}
-          >
-            {Object.entries(AI_LEVELS).map(([value, profile]) => (
-              <option key={value} value={value}>{language === "zh" ? profile.label : profile.labelEn}</option>
-            ))}
-          </select>
+          <span className="roster-card__ai-controls">
+            <select
+              value={player.aiLevel}
+              onChange={(event) => onLevelChange(event.target.value as AiLevel)}
+              aria-label={text(`${player.name} AI 强度`, `${player.name} AI difficulty`)}
+            >
+              {Object.entries(AI_LEVELS).map(([value, profile]) => (
+                <option key={value} value={value}>{language === "zh" ? profile.label : profile.labelEn}</option>
+              ))}
+            </select>
+            <button
+              className="roster-card__remove-ai"
+              type="button"
+              disabled={total <= 1}
+              onClick={onRemove}
+              aria-label={text(`移除 ${player.name}`, `Remove ${player.name}`)}
+            >{text("移除 AI", "Remove AI")}</button>
+          </span>
         )}
         <span className="formation-buttons">
           <button onClick={() => onMove(-1)} disabled={index === 0} aria-label={text(`${player.name} 前移`, `Move ${player.name} forward`)}>{text("前", "Forward")}</button>
@@ -1181,44 +1198,73 @@ export default function SnowballGame() {
       const active = teamPlayers.filter((player) => player.active).sort((a, b) => a.position - b.position);
       let next = current;
       if (requestedSize < active.length) {
-        let keep = active.slice(0, requestedSize);
-        if (team === "pine") {
-          const localPlayer = active.find((player) => player.isUser);
-          if (localPlayer && !keep.some((player) => player.id === localPlayer.id)) {
-            keep = [
-              ...active.filter((player) => !player.isUser).slice(0, requestedSize - 1),
-              localPlayer,
-            ].sort((a, b) => a.position - b.position);
-          }
-        }
-        const keepIds = new Set(keep.map((player) => player.id));
+        const removeIds = new Set(active
+          .filter((player) => !player.isUser)
+          .sort((a, b) => b.position - a.position)
+          .slice(0, active.length - requestedSize)
+          .map((player) => player.id));
+        if (removeIds.size !== active.length - requestedSize) return current;
         next = current.map((player) =>
-          player.team === team && player.active && !keepIds.has(player.id)
-            ? { ...player, active: false }
+          removeIds.has(player.id)
+            ? { ...player, active: false, aiLevel: DEFAULT_AI_LEVEL }
             : player,
         );
       } else if (requestedSize > active.length) {
         const inactive = teamPlayers
-          .filter((player) => !player.active)
+          .filter((player) => !player.active && !player.isUser)
           .sort((a, b) => a.slot - b.slot)
           .slice(0, requestedSize - active.length);
         const addIds = new Set(inactive.map((player) => player.id));
-        let nextPosition = active.length;
         next = current.map((player) =>
           addIds.has(player.id)
-            ? { ...player, active: true, position: nextPosition++, health: player.maxHealth }
+            ? {
+                ...player,
+                active: true,
+                health: player.maxHealth,
+                aiLevel: DEFAULT_AI_LEVEL,
+              }
             : player,
         );
       }
+      const ordered = next
+        .filter((candidate) => candidate.team === team && candidate.active)
+        .sort((a, b) => a.position - b.position);
+      const localPlayer = ordered.find((candidate) => candidate.isUser);
+      const normalizedOrder = requestedSize > active.length && localPlayer
+        ? [...ordered.filter((candidate) => !candidate.isUser), localPlayer]
+        : ordered;
       const normalized = next.map((player) => {
         if (player.team !== team || !player.active) return player;
-        const order = next
-          .filter((candidate) => candidate.team === team && candidate.active)
-          .sort((a, b) => a.position - b.position);
-        return { ...player, position: order.findIndex((candidate) => candidate.id === player.id) };
+        return {
+          ...player,
+          position: normalizedOrder.findIndex((candidate) => candidate.id === player.id),
+        };
       });
       playersRef.current = normalized;
       return normalized;
+    });
+  };
+
+  const removeLocalAi = (playerId: string) => {
+    setPlayers((current) => {
+      const target = current.find((player) => player.id === playerId);
+      if (!target || !target.active || target.isUser) return current;
+      const activeTeam = current
+        .filter((player) => player.team === target.team && player.active)
+        .sort((a, b) => a.position - b.position);
+      if (activeTeam.length <= 1) return current;
+      const remainingIds = activeTeam
+        .filter((player) => player.id !== target.id)
+        .map((player) => player.id);
+      const next = current.map((player) => {
+        if (player.id === target.id) {
+          return { ...player, active: false, aiLevel: DEFAULT_AI_LEVEL };
+        }
+        if (player.team !== target.team || !player.active) return player;
+        return { ...player, position: remainingIds.indexOf(player.id) };
+      });
+      playersRef.current = next;
+      return next;
     });
   };
 
@@ -2298,6 +2344,7 @@ export default function SnowballGame() {
                       total={pinePlayers.length}
                       onMove={(direction) => movePlayer(player.id, direction)}
                       onLevelChange={(level) => changeAiLevel(player.id, level)}
+                      onRemove={() => removeLocalAi(player.id)}
                     />
                   ))}
                 </section>
@@ -2312,6 +2359,7 @@ export default function SnowballGame() {
                       total={berryPlayers.length}
                       onMove={(direction) => movePlayer(player.id, direction)}
                       onLevelChange={(level) => changeAiLevel(player.id, level)}
+                      onRemove={() => removeLocalAi(player.id)}
                     />
                   ))}
                 </section>

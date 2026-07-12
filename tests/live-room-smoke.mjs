@@ -144,13 +144,45 @@ try {
   );
   assert.equal(guestWelcome.snapshot.players.find((player) => player.id === guestWelcome.snapshot.selfPlayerId)?.name, "Guest");
   assert.ok(hostWelcome.snapshot.players.every((player) => player.maxHealth === 100 && player.health === 100));
+  const hostPlayer = hostWelcome.snapshot.players.find((player) => player.id === hostWelcome.snapshot.selfPlayerId);
+  const guestPlayer = guestWelcome.snapshot.players.find((player) => player.id === guestWelcome.snapshot.selfPlayerId);
+  assert.equal(
+    hostPlayer?.position,
+    hostWelcome.snapshot.players.filter((player) => player.team === hostPlayer?.team).length - 1,
+  );
+  assert.equal(
+    guestPlayer?.position,
+    guestWelcome.snapshot.players.filter((player) => player.team === guestPlayer?.team).length - 1,
+  );
+  assert.ok(guestWelcome.snapshot.players
+    .filter((player) => player.controller.kind === "ai")
+    .every((player) => player.controller.level === "steady"));
 
-  guest.send({ op: "lobby.move", playerId: guestWelcome.snapshot.selfPlayerId, direction: 1 });
-  const guestMoved = await guest.waitFor((message) => message.type === "snapshot"
-    && message.snapshot.players.find((player) => player.id === guestWelcome.snapshot.selfPlayerId)?.position === 1);
+  const removableAi = guestWelcome.snapshot.players.find((player) => player.team === "berry" && player.controller.kind === "ai");
+  assert.ok(removableAi);
+  guest.send({ op: "lobby.remove_ai", playerId: removableAi.id });
+  const removeRejected = await guest.waitFor((message) => message.type === "error" && message.code === "HOST_ONLY");
+  assert.equal(removeRejected.code, "HOST_ONLY");
+
+  host.send({ op: "lobby.remove_ai", playerId: removableAi.id });
+  const aiRemoved = await guest.waitFor((message) => message.type === "snapshot"
+    && message.snapshot.config.berrySize === 2
+    && !message.snapshot.players.some((player) => player.id === removableAi.id));
+  assert.deepEqual(
+    aiRemoved.snapshot.players
+      .filter((player) => player.team === "berry")
+      .sort((left, right) => left.position - right.position)
+      .map((player) => player.position),
+    [0, 1],
+  );
+
   guest.send({ op: "lobby.move", playerId: guestWelcome.snapshot.selfPlayerId, direction: -1 });
-  await guest.waitFor((message) => message.type === "snapshot"
+  const guestMoved = await guest.waitFor((message) => message.type === "snapshot"
     && message.snapshot.players.find((player) => player.id === guestWelcome.snapshot.selfPlayerId)?.position === 0
+    && message.snapshot.revision > aiRemoved.snapshot.revision);
+  guest.send({ op: "lobby.move", playerId: guestWelcome.snapshot.selfPlayerId, direction: 1 });
+  await guest.waitFor((message) => message.type === "snapshot"
+    && message.snapshot.players.find((player) => player.id === guestWelcome.snapshot.selfPlayerId)?.position === 1
     && message.snapshot.revision > guestMoved.snapshot.revision);
 
   host.send({ op: "lobby.set_config", config: {
