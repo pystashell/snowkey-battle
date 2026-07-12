@@ -2,7 +2,7 @@
 
 > A real-time typing snowball fight across a frozen river.
 
-[Play the live game](https://snow-fighting-game.liuxingzhi99.workers.dev/) · [中文说明](#中文说明)
+[Play the live game](https://snow-fighting-game.pystashell.workers.dev/) · [中文说明](#中文说明)
 
 SnowKey Battle is a browser remake of a childhood multiplayer typing game. English words fall as snowflakes: type one before anyone else to catch it, pack it into a snowball, and throw it at the opposing team. The character art is drawn from scratch with CSS and only takes visual inspiration from the warm, rounded winter outfits of [Snowcraft](https://github.com/seanpm2001/Snowcraft); no original Snowcraft sprites or assets are included.
 
