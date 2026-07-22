@@ -90,6 +90,9 @@ test("server-renders the complete English lobby for a non-Chinese browser", asyn
   assert.doesNotMatch(html, /Words remain until claimed/);
   assert.match(html, /Everyone has 100 HP/);
   assert.match(html, /语言 \/ Language/);
+  assert.match(html, /aria-label="Game audio"/);
+  assert.match(html, /Lobby music/);
+  assert.match(html, /Preparing audio/);
 });
 
 test("the language cookie overrides the browser language", async () => {

@@ -1,0 +1,42 @@
+# SnowKey Battle 网页版音频素材与许可
+
+本目录中的音频全部随 SnowKey Battle 网页版在同一站点发布。浏览器通过
+`/audio/music/` 和 `/audio/sfx/` 路径读取本地静态资源，不会热链或请求
+OpenGameArt 的文件，因此播放过程不依赖第三方音频站点。
+
+## 自制游戏音效
+
+以下三段音效不含录音、采样包或第三方素材，由
+[`scripts/generate-web-sfx.mjs`](../../scripts/generate-web-sfx.mjs)
+以确定性的数学波形和伪随机噪声合成。项目仅将这三段生成音效按
+[CC0 1.0 Universal](https://creativecommons.org/publicdomain/zero/1.0/)
+发布，可复制、修改及用于商业项目，无需署名。
+
+| 用途 | 浏览器资源路径 | 声音设计 |
+| --- | --- | --- |
+| 搓、压实雪球 | `/audio/sfx/snowball-pack.wav` | 0.18 秒的雪粒摩擦、抓紧与短促“咯吱”压实声 |
+| 雪球击中 | `/audio/sfx/snowball-hit.wav` | 0.19 秒的柔和雪团接触、碎雪爆开声，无金属或长共鸣尾音 |
+| 角色倒下 | `/audio/sfx/player-down.wav` | 下坠音高、柔和落地冲击和雪面沉降尾音 |
+
+重新生成命令：
+
+```powershell
+node scripts/generate-web-sfx.mjs
+```
+
+## 背景音乐
+
+下列四首音乐均由其 OpenGameArt 素材页面标为
+[CC0 1.0 Universal](https://creativecommons.org/publicdomain/zero/1.0/)。CC0
+不要求署名，但这里保留作者、来源和许可信息，便于玩家查看曲名并追溯素材。
+
+| 曲名 | 场景 | 作者 | OpenGameArt 源页面 | 许可 | 浏览器资源路径 |
+| --- | --- | --- | --- | --- | --- |
+| Wintery loop | 大厅 | Emma_MA | [Wintery loop](https://opengameart.org/content/wintery-loop) | [CC0 1.0](https://creativecommons.org/publicdomain/zero/1.0/) | `/audio/music/wintery-loop.mp3` |
+| Winter Wind | 大厅 | wipics | [Winter Wind](https://opengameart.org/content/winter-wind) | [CC0 1.0](https://creativecommons.org/publicdomain/zero/1.0/) | `/audio/music/winter-wind.mp3` |
+| Happy synths loop with slight christmas feeling | 大厅（默认） | 3xBlast | [Happy synths loop with slight christmas feeling](https://opengameart.org/content/happy-synths-loop-with-slight-christmas-feeling) | [CC0 1.0](https://creativecommons.org/publicdomain/zero/1.0/) | `/audio/music/happy-synths.mp3` |
+| Black Diamond | 战斗（默认） | Joth | [Black Diamond](https://opengameart.org/content/black-diamond) | [CC0 1.0](https://creativecommons.org/publicdomain/zero/1.0/) | `/audio/music/black-diamond.mp3` |
+
+音乐文件只做本地格式与码率转换，不改变原作品的 CC0 许可状态。虽然 CC0
+允许商用且无需征得许可，素材页面和 Creative Commons 也不为权利状态提供
+担保；发布时应保留本清单与原始下载记录作为素材来源凭据。

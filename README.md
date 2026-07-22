@@ -15,6 +15,7 @@ SnowKey Battle is a browser remake of a childhood multiplayer typing game. Engli
 - When the host leaves, ownership passes to the earliest remaining human by join order—never to AI.
 - English-only typing with seven built-in wordbooks, including large CET-4, CET-6, and Postgraduate English collections.
 - Fully animated catch, pack, wind-up, throw, flight, hit, freeze, and knockdown states.
+- Original short snowball sound effects plus four locally bundled CC0 winter tracks, split into separate lobby and battle choices with scene-aware shuffle, pause, volume, and independent music/SFX switches.
 - Super Snowflakes use rotating long words, hit the whole enemy team for 15 damage, and freeze survivors for one second.
 - Chinese and English interfaces selected from the browser language, with a visible manual switch.
 
@@ -78,6 +79,16 @@ npm run deploy
 
 The web app, room API, and WebSocket endpoint share one `workers.dev` origin, so no separate server or cross-origin configuration is required.
 
+## Audio assets
+
+The music menu always shows the current track, artist, CC0 license, and original OpenGameArt source. Lobby and battle choices are stored separately: the cheerful `Happy Synths` is the default lobby track, while the stronger `Black Diamond` starts with the countdown. Selecting a track starts it immediately; selecting a track for the other scene previews it for eight seconds before returning to the current scene. Shuffle stays inside the chosen scene and avoids an immediate repeat when the scene has more than one track.
+
+Music can be paused or disabled, sound effects can be disabled independently, and both have persistent volume sliders. The default music slider is 50%, producing half of the previous tuned output level. The packing and hit sounds are 0.18 and 0.19 seconds respectively, use reduced gain, and limit same-kind overlap during busy battles.
+
+Browsers may wait for the first click or key press before allowing sound.
+
+All music is bundled locally and was published as CC0 on OpenGameArt. The three game sound effects are reproducible, original synthesized waveforms released as CC0 by this project. See [`public/audio/AUDIO_LICENSES.md`](public/audio/AUDIO_LICENSES.md) for the complete source and license record.
+
 ## Wordbook data
 
 The CET-4, CET-6, and Postgraduate English books are generated primarily from the exam tags in [ECDICT](https://github.com/skywind3000/ECDICT), pinned to revision `bc015ed2e24a7abef49fc6dbbb7fe32c1dadaf8b`. ECDICT is distributed under the MIT License; its license copy is included in this repository. A small set of 18–24-letter game challenge words is added separately and must not be interpreted as an official exam syllabus.
@@ -107,6 +118,8 @@ npm run generate:wordbooks
 - 房主可在大厅移除 AI 或其他真人；新增、补位和真人离开后留下的 AI 默认使用熟练难度。
 - 房主主动离开后，房主身份严格按加入顺序交给下一位真人，永远不会交给 AI。
 - 抢到单词后会完整播放抓取、攥雪球、蓄力投掷、飞行和受击动画。
+- 大厅与战斗分别选择并记住音乐：大厅默认播放轻快的 `Happy Synths`，倒计时开始后切换到更有冲劲的 `Black Diamond`；每首歌都显示作者、CC0 许可和 OpenGameArt 出处，并支持分场景随机、暂停/继续、音乐与音效独立开关和独立音量。
+- 攥雪球与雪球命中音效分别只有 0.18 秒和 0.19 秒，同类声音会限制并发，避免多人连续投掷时叠成持续噪声。
 
 ## 判定与数值
 
