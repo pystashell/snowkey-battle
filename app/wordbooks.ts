@@ -2,6 +2,8 @@ import {
   ECDICT_CET4_WORDS,
   ECDICT_CET6_WORDS,
   ECDICT_POSTGRADUATE_WORDS,
+  ECDICT_SAT_WORDS,
+  ECDICT_TOEFL_WORDS,
 } from "./wordbooks-data/exam-wordbooks.ts";
 import { normalizePlayableWords } from "../shared/word-rules.ts";
 
@@ -10,8 +12,8 @@ export type WordbookId =
   | "cet4"
   | "cet6"
   | "postgraduate"
-  | "conceptStarter"
-  | "conceptProgress"
+  | "toefl"
+  | "sat"
   | "mixed";
 
 export type Wordbook = {
@@ -127,39 +129,16 @@ const postgraduateWords = normalizeWords([
   ...postgraduateLongChallengeWords,
 ]);
 
-const conceptStarterWords = normalizeWords([
-  "family", "friend", "school", "teacher", "student", "lesson", "question", "answer", "picture", "window",
-  "garden", "kitchen", "bedroom", "morning", "evening", "breakfast", "dinner", "coffee", "market",
-  "station", "ticket", "street", "village", "country", "office", "doctor", "nurse", "driver", "farmer",
-  "engineer", "waiter", "letter", "newspaper", "magazine", "camera", "bottle", "basket", "umbrella",
-  "bicycle", "airplane", "journey", "holiday", "weekend", "yesterday", "tomorrow", "always", "sometimes",
-  "usually", "quickly", "slowly", "careful", "hungry", "thirsty", "tired", "busy", "ready", "beautiful",
-  "interesting", "different", "favorite", "remember", "understand", "describe", "listen", "speak", "write",
-  "carry", "choose", "finish", "follow", "happen", "invite", "learn", "leave", "meet", "open", "return",
-  "send", "travel", "visit", "watch", "welcome", "weather", "season", "spring", "summer", "autumn",
-]);
-
-const conceptProgressWords = normalizeWords([
-  "accident", "adventure", "airport", "ancient", "attention", "audience", "behavior", "business", "captain",
-  "century", "certain", "circus", "conversation", "crowd", "dangerous", "decision", "discover", "distance",
-  "electric", "enormous", "entrance", "explain", "famous", "fortune", "government", "habit", "immediately",
-  "journey", "machine", "manager", "message", "museum", "mystery", "necessary", "notice", "ordinary",
-  "passenger", "perfect", "performance", "photograph", "police", "prison", "private", "promise", "public",
-  "receive", "recently", "record", "repair", "report", "restaurant", "secret", "serious", "service",
-  "situation", "successful", "surprise", "theater", "throughout", "traffic", "valuable", "wonderful",
-  "abroad", "accept", "afford", "appear", "believe", "borrow", "complain", "continue", "deliver", "expect",
-  "experience", "fail", "imagine", "improve", "manage", "offer", "prepare", "realize", "recognize",
-  "refuse", "remind", "save", "search", "seem", "spend", "suggest", "survive", "throw", "worry",
-  "although", "however", "perhaps", "suddenly", "towards", "without", "already", "almost", "enough",
-]);
+const satWords = normalizeWords(ECDICT_SAT_WORDS);
+const toeflWords = normalizeWords(ECDICT_TOEFL_WORDS);
 
 const mixedWords = normalizeWords([
   ...winterWords,
   ...cet4Words,
   ...cet6Words,
   ...postgraduateWords,
-  ...conceptStarterWords,
-  ...conceptProgressWords,
+  ...toeflWords,
+  ...satWords,
 ]);
 
 export const WORD_BOOKS: Record<WordbookId, Wordbook> = {
@@ -211,29 +190,29 @@ export const WORD_BOOKS: Record<WordbookId, Wordbook> = {
     sourceNoteEn: "ECDICT exam-tag data (MIT) + game-only long-word additions; not an official syllabus or textbook",
     words: postgraduateWords,
   },
-  conceptStarter: {
-    id: "conceptStarter",
-    label: "经典情景英语 · 入门",
-    labelEn: "Classic Situational English · Starter",
-    shortLabel: "情景入门",
-    shortLabelEn: "Situational Starter",
-    description: "日常人物、地点、动作和时间表达，按循序渐进的课文式场景整理。",
-    descriptionEn: "Everyday people, places, actions, and time expressions arranged as progressive scenes.",
-    sourceNote: "独立整理，不复制特定教材词表",
-    sourceNoteEn: "Independently organized, not copied from a textbook",
-    words: conceptStarterWords,
+  toefl: {
+    id: "toefl",
+    label: "托福英语 · 大型词库",
+    labelEn: "TOEFL English · Large Wordbook",
+    shortLabel: "托福词库",
+    shortLabelEn: "TOEFL",
+    description: "覆盖 6,900+ 个 ECDICT 托福标签词，适合学术阅读与词汇速度训练。",
+    descriptionEn: "Over 6,900 ECDICT TOEFL-tagged words for academic reading and vocabulary-speed practice.",
+    sourceNote: "ECDICT（MIT）托福考试标签数据；非 ETS 官方词表",
+    sourceNoteEn: "ECDICT TOEFL exam-tag data (MIT); not an official ETS list",
+    words: toeflWords,
   },
-  conceptProgress: {
-    id: "conceptProgress",
-    label: "经典情景英语 · 进阶",
-    labelEn: "Classic Situational English · Advanced",
-    shortLabel: "情景进阶",
-    shortLabelEn: "Situational Advanced",
-    description: "故事叙述、旅行和社会场景常用词，长词比例更高。",
-    descriptionEn: "Vocabulary for storytelling, travel, and social situations, with a larger share of long words.",
-    sourceNote: "独立整理，不复制特定教材词表",
-    sourceNoteEn: "Independently organized, not copied from a textbook",
-    words: conceptProgressWords,
+  sat: {
+    id: "sat",
+    label: "SAT 英语 · 大型词库",
+    labelEn: "SAT English · Large Wordbook",
+    shortLabel: "SAT 词库",
+    shortLabelEn: "SAT English",
+    description: "9,000+ 个 SAT 备考向学术词汇，适合英文阅读与词汇强化；非 College Board 官方词表。",
+    descriptionEn: "Over 9,000 SAT-oriented academic words for reading and vocabulary practice; not an official College Board list.",
+    sourceNote: "基于 ECDICT（MIT）的 TOEFL/IELTS 考试标签整理；非 College Board 官方词表",
+    sourceNoteEn: "Derived from ECDICT TOEFL/IELTS exam tags (MIT); not an official College Board list",
+    words: satWords,
   },
   mixed: {
     id: "mixed",

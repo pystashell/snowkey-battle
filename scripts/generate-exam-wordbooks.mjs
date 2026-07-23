@@ -78,6 +78,8 @@ const books = {
   cet4: new Set(),
   cet6: new Set(),
   postgraduate: new Set(),
+  sat: new Set(),
+  toefl: new Set(),
 };
 let columns = null;
 
@@ -92,6 +94,11 @@ visitCsv(source, (row) => {
   if (tags.has("cet4")) books.cet4.add(word);
   if (tags.has("cet6")) books.cet6.add(word);
   if (tags.has("ky")) books.postgraduate.add(word);
+  // ECDICT does not expose a dedicated SAT tag. Build a broad SAT-study
+  // pack from its TOEFL/IELTS academic-reading tags and describe it as
+  // SAT-oriented (not an official College Board list) in the product UI.
+  if (tags.has("toefl") || tags.has("ielts")) books.sat.add(word);
+  if (tags.has("toefl")) books.toefl.add(word);
 });
 
 const sorted = Object.fromEntries(
@@ -111,6 +118,10 @@ const output = [
   formatArray("ECDICT_CET6_WORDS", sorted.cet6),
   "",
   formatArray("ECDICT_POSTGRADUATE_WORDS", sorted.postgraduate),
+  "",
+  formatArray("ECDICT_SAT_WORDS", sorted.sat),
+  "",
+  formatArray("ECDICT_TOEFL_WORDS", sorted.toefl),
   "",
 ].join("\n");
 

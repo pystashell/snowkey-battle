@@ -44,7 +44,7 @@ const FROST_FREEZE_MS = 1_000;
 const PLAYER_MAX_HEALTH = 100;
 const WORD_START_Y = 7;
 const WORD_GROUND_TTL_MS = 2_000;
-const WORD_POOL_VERSION = 3;
+const WORD_POOL_VERSION = 4;
 
 type RandomSource = () => number;
 
@@ -187,10 +187,16 @@ const DEFAULT_WORDBOOKS: Record<WordbookId, readonly string[]> = {
   cet4: ["ability", "academic", "access", "achieve", "adapt", "advance", "benefit", "career", "challenge", "community", "compare", "complex", "conduct", "context", "culture", "develop"],
   cet6: ["abstract", "abundant", "accelerate", "acknowledge", "adequate", "advocate", "allocate", "ambiguous", "anticipate", "articulate", "coherent", "comprehensive", "derive", "empirical", "hypothesis", "inevitable"],
   postgraduate: ["abstraction", "accountability", "architecture", "ascertain", "autonomy", "configuration", "credibility", "dialectical", "differentiate", "equilibrium", "indispensable", "infrastructure", "methodology", "perspective", "socioeconomic", "theoretical"],
-  conceptStarter: ["family", "friend", "school", "teacher", "student", "lesson", "question", "answer", "picture", "window", "garden", "kitchen", "morning", "evening", "market", "station"],
-  conceptProgress: ["accident", "adventure", "airport", "ancient", "attention", "audience", "behavior", "business", "captain", "century", "conversation", "decision", "discover", "distance", "electric", "enormous"],
+  toefl: ["academic", "adapt", "analyze", "approach", "assess", "coherent", "comprehensive", "derive", "empirical", "hypothesis", "interpret", "methodology", "significant", "synthesis", "valid", "variable"],
+  sat: ["abate", "abstract", "acclaim", "analogy", "articulate", "coherent", "compelling", "concise", "corroborate", "credible", "derive", "empirical", "infer", "nuance", "rhetoric", "synthesis"],
   mixed: [],
 };
+
+const WORD_BOOK_IDS = new Set(Object.keys(DEFAULT_WORDBOOKS));
+
+function isWordbookId(value: unknown): value is WordbookId {
+  return typeof value === "string" && WORD_BOOK_IDS.has(value);
+}
 
 function clone<T>(value: T): T {
   return JSON.parse(JSON.stringify(value)) as T;
@@ -311,7 +317,7 @@ function defaultConfig(): RoomConfig {
   return {
     pineSize: 3,
     berrySize: 3,
-    wordbookId: "winter",
+    wordbookId: "cet4",
     snowfallLevel: "classic",
   };
 }
@@ -348,6 +354,22 @@ export class RoomEngine {
       attack.kind ??= "normal";
       attack.targetIds ??= attack.targetId ? [attack.targetId] : [];
     }
+    if (!isWordbookId(this.state.config.wordbookId)) {
+      // Rooms persisted before the two small situational books were retired
+      // migrate to the new CET-4 default instead of failing during restore.
+      this.state.config.wordbookId = "cet4";
+      this.state.wordBagBookId = "cet4";
+      this.state.wordBag = [];
+      this.state.frostWordBag = [];
+      this.state.recentWords = [];
+      this.state.recentFrostWords = [];
+    } else if (!isWordbookId(this.state.wordBagBookId)) {
+      this.state.wordBagBookId = this.state.config.wordbookId;
+      this.state.wordBag = [];
+      this.state.frostWordBag = [];
+      this.state.recentWords = [];
+      this.state.recentFrostWords = [];
+    }
     if (this.state.wordPoolVersion !== WORD_POOL_VERSION) {
       this.state.wordPoolVersion = WORD_POOL_VERSION;
       this.state.wordBagBookId = this.state.config.wordbookId;
@@ -365,17 +387,17 @@ export class RoomEngine {
     const cet4 = sanitizeWords(supplied.cet4 ?? DEFAULT_WORDBOOKS.cet4);
     const cet6 = sanitizeWords(supplied.cet6 ?? DEFAULT_WORDBOOKS.cet6);
     const postgraduate = sanitizeWords(supplied.postgraduate ?? DEFAULT_WORDBOOKS.postgraduate);
-    const starter = sanitizeWords(supplied.conceptStarter ?? DEFAULT_WORDBOOKS.conceptStarter);
-    const progress = sanitizeWords(supplied.conceptProgress ?? DEFAULT_WORDBOOKS.conceptProgress);
-    const mixed = sanitizeWords(supplied.mixed ?? [...winter, ...cet4, ...cet6, ...postgraduate, ...starter, ...progress]);
+    const toefl = sanitizeWords(supplied.toefl ?? DEFAULT_WORDBOOKS.toefl);
+    const sat = sanitizeWords(supplied.sat ?? DEFAULT_WORDBOOKS.sat);
+    const mixed = sanitizeWords(supplied.mixed ?? [...winter, ...cet4, ...cet6, ...postgraduate, ...toefl, ...sat]);
     this.wordbooks = {
       winter: winter.length ? winter : DEFAULT_WORDBOOKS.winter,
       cet4: cet4.length ? cet4 : DEFAULT_WORDBOOKS.cet4,
       cet6: cet6.length ? cet6 : DEFAULT_WORDBOOKS.cet6,
       postgraduate: postgraduate.length ? postgraduate : DEFAULT_WORDBOOKS.postgraduate,
-      conceptStarter: starter.length ? starter : DEFAULT_WORDBOOKS.conceptStarter,
-      conceptProgress: progress.length ? progress : DEFAULT_WORDBOOKS.conceptProgress,
-      mixed: mixed.length ? mixed : DEFAULT_WORDBOOKS.winter,
+      toefl: toefl.length ? toefl : DEFAULT_WORDBOOKS.toefl,
+      sat: sat.length ? sat : DEFAULT_WORDBOOKS.sat,
+      mixed: mixed.length ? mixed : DEFAULT_WORDBOOKS.cet4,
     };
     this.reconcileAiNames();
     this.reconcileHostInvariant();

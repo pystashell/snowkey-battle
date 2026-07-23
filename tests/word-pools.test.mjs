@@ -13,14 +13,13 @@ import {
   isPlayableWord,
 } from "../shared/word-rules.ts";
 
-const ACADEMIC_WORDBOOK_IDS = ["cet4", "cet6", "postgraduate"];
+const ACADEMIC_WORDBOOK_IDS = ["cet4", "cet6", "postgraduate", "toefl", "sat"];
+const GAME_LONG_WORD_CHALLENGE_IDS = new Set(["cet4", "cet6", "postgraduate"]);
 
-test("academic wordbooks contain thousands of unique playable words and varied long-word challenges", () => {
+test("academic wordbooks contain thousands of unique playable words", () => {
   for (const id of ACADEMIC_WORDBOOK_IDS) {
     const wordbook = WORD_BOOKS[id];
     const uniqueWords = new Set(wordbook.words);
-    const longWords = wordbook.words.filter((word) => word.length >= 18);
-    const pools = buildWordPools(wordbook.words);
 
     assert.ok(wordbook.words.length >= 500, `${id}: ${wordbook.words.length} words`);
     assert.equal(uniqueWords.size, wordbook.words.length, `${id}: duplicate word`);
@@ -29,21 +28,34 @@ test("academic wordbooks contain thousands of unique playable words and varied l
       wordbook.words.every((word) => word.length >= MIN_WORD_LENGTH && word.length <= MAX_WORD_LENGTH),
       `${id}: word outside ${MIN_WORD_LENGTH}-${MAX_WORD_LENGTH} letters`,
     );
-    assert.ok(longWords.length >= FROST_WORD_POOL_SIZE, `${id}: too few 18+ letter challenge words`);
-    assert.ok(
-      pools.frostWords.every((word) => word.length >= 18),
-      `${id}: the longest-word rotation should consist of genuine long words`,
-    );
+    if (GAME_LONG_WORD_CHALLENGE_IDS.has(id)) {
+      const longWords = wordbook.words.filter((word) => word.length >= 18);
+      const pools = buildWordPools(wordbook.words);
+      assert.ok(longWords.length >= FROST_WORD_POOL_SIZE, `${id}: too few 18+ letter challenge words`);
+      assert.ok(
+        pools.frostWords.every((word) => word.length >= 18),
+        `${id}: the longest-word rotation should consist of genuine long words`,
+      );
+    }
   }
 });
 
 test("the mixed challenge is the deduplicated union of the six source wordbooks", () => {
-  const sourceIds = ["winter", "cet4", "cet6", "postgraduate", "conceptStarter", "conceptProgress"];
+  const sourceIds = ["winter", "cet4", "cet6", "postgraduate", "toefl", "sat"];
   const expected = new Set(sourceIds.flatMap((id) => WORD_BOOKS[id].words));
   const actual = new Set(WORD_BOOKS.mixed.words);
 
   assert.equal(actual.size, WORD_BOOKS.mixed.words.length);
   assert.deepEqual(actual, expected);
+});
+
+test("retired situational books are absent while SAT and TOEFL are selectable", () => {
+  assert.deepEqual(
+    Object.keys(WORD_BOOKS),
+    ["winter", "cet4", "cet6", "postgraduate", "toefl", "sat", "mixed"],
+  );
+  assert.equal("conceptStarter" in WORD_BOOKS, false);
+  assert.equal("conceptProgress" in WORD_BOOKS, false);
 });
 
 test("every built-in wordbook reserves its ten longest unique words for frost snowflakes", () => {

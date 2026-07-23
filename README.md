@@ -13,7 +13,7 @@ SnowKey Battle is a browser remake of a childhood multiplayer typing game. Engli
 - Individual 100 HP health bars and formation tactics: new players enter at the back, while the living frontline absorbs incoming snowballs.
 - The host can remove AI seats or other human players from the lobby; newly created and vacated AI seats default to Skilled.
 - When the host leaves, ownership passes to the earliest remaining human by join order—never to AI.
-- English-only typing with seven built-in wordbooks, including large CET-4, CET-6, and Postgraduate English collections.
+- English-only typing with seven built-in wordbooks; CET-4 is the default, followed by large CET-6, Postgraduate, TOEFL, and SAT-oriented collections in difficulty order.
 - Fully animated catch, pack, wind-up, throw, flight, hit, freeze, and knockdown states.
 - Original short snowball sound effects, four locally bundled CC0 winter background tracks, and user-provided Aigei victory/defeat cues, with scene-aware shuffle, pause, volume, and independent music/SFX switches.
 - Super Snowflakes use rotating long words, hit the whole enemy team for 15 damage, and freeze survivors for one second.
@@ -58,7 +58,10 @@ npm test
 npm run lint
 ```
 
-Run a real room smoke test against a running local server:
+Run the real-room test suite against a running local server. It includes the
+two-client gameplay smoke test plus a roughly 68-second abrupt-disconnect
+check that verifies the final human's room cannot be joined after the
+reconnect grace period:
 
 ```bash
 npm run test:live
@@ -68,6 +71,13 @@ Or test the public deployment:
 
 ```bash
 SNOW_BATTLE_URL=https://your-worker.workers.dev npm run test:live
+```
+
+To run either live check by itself:
+
+```bash
+npm run test:live:smoke
+npm run test:live:reclaim
 ```
 
 Deploy your own Worker and Durable Object:
@@ -93,7 +103,7 @@ All audio is bundled locally. The four background tracks were published as CC0 o
 
 ## Wordbook data
 
-The CET-4, CET-6, and Postgraduate English books are generated primarily from the exam tags in [ECDICT](https://github.com/skywind3000/ECDICT), pinned to revision `bc015ed2e24a7abef49fc6dbbb7fe32c1dadaf8b`. ECDICT is distributed under the MIT License; its license copy is included in this repository. A small set of 18–24-letter game challenge words is added separately and must not be interpreted as an official exam syllabus.
+The CET-4, CET-6, Postgraduate English, TOEFL, and SAT-oriented books are generated from [ECDICT](https://github.com/skywind3000/ECDICT), pinned to revision `bc015ed2e24a7abef49fc6dbbb7fe32c1dadaf8b`. ECDICT is distributed under the MIT License; its license copy is included in this repository. TOEFL uses ECDICT's `toefl` tag. Because ECDICT has no dedicated SAT tag, the SAT-oriented book combines its TOEFL and IELTS academic-reading tags and is explicitly not an official College Board list. A small set of 18–24-letter game challenge words is added only to CET-4, CET-6, and Postgraduate English and must not be interpreted as an official exam syllabus.
 
 Regenerate the academic wordbooks with:
 
@@ -112,8 +122,8 @@ npm run generate:wordbooks
 - 阵型可以在开战前调整；全员统一 100 HP，由前排先承伤，后排继续抢词输出。
 - 所有单词雪花都是英文，只接受 `a-z` 输入；雪花在空中不会消失，落地后保留 2 秒，随后融化且不能再抢。
 - 雪花有三种竞速状态：无人输入、AI 正在输入、玩家当前领先。
-- 可选择冬日基础、大学四级、大学六级、考研英语、经典情景英语入门/进阶和混合挑战 7 个内置单词册；四级、六级和考研词册各有数千个去重单词，均远超 500 词。
-- 学术词册以 ECDICT 的考试标签数据为主体，另加入少量仅用于游戏的 18–24 字母长词挑战补充；这些补充不属于 ECDICT 考试标签，也不代表官方考试大纲或教材词表。
+- 默认使用大学四级词库；按难度还可选择冬日基础、大学六级、考研英语、托福英语、SAT 英语和混合挑战，共 7 个内置单词册。原有两本小型经典情景英语词册已移除。
+- 四级、六级、考研和托福词册来自 ECDICT 的对应考试标签；SAT 词册由 ECDICT 的 TOEFL/IELTS 学术阅读标签整理，是 SAT 备考向游戏词包，不是 College Board 官方词表。仅四级、六级和考研词册另加入少量用于游戏的 18–24 字母长词挑战补充。
 - 普通词与超级雪花词分别使用无放回洗牌袋，并回避近期出现过的词；每册最长的 10 个词轮换为超级雪花，完整一轮前不会重复。
 - 超级雪花命中对方所有存活角色 15 点，并把他们冻住 1 秒；普通雪球只攻击锁定时的敌方前排。
 - 雪量有舒缓、标准、暴雪三档；每次出雪间隔都会随机变化，并偶尔形成短阵雪或空档。
@@ -156,9 +166,9 @@ npm run dev
 
 ## 词库来源与更新
 
-大学四级、大学六级和考研英语词册由 [ECDICT](https://github.com/skywind3000/ECDICT) 的 `ecdict.csv` 考试标签生成，固定使用修订版 `bc015ed2e24a7abef49fc6dbbb7fe32c1dadaf8b`。ECDICT 使用 [MIT License](https://github.com/skywind3000/ECDICT/blob/bc015ed2e24a7abef49fc6dbbb7fe32c1dadaf8b/LICENSE)；仓库同时保留许可证副本。生成器只保留 2–24 个小写英文字母组成的词并自动去重。
+大学四级、大学六级、考研英语、托福英语和 SAT 备考向词册由 [ECDICT](https://github.com/skywind3000/ECDICT) 的 `ecdict.csv` 生成，固定使用修订版 `bc015ed2e24a7abef49fc6dbbb7fe32c1dadaf8b`。托福词册直接采用 `toefl` 标签；ECDICT 没有独立 SAT 标签，因此 SAT 词册合并 `toefl` 与 `ielts` 标签，并明确标注为非 College Board 官方词表。ECDICT 使用 [MIT License](https://github.com/skywind3000/ECDICT/blob/bc015ed2e24a7abef49fc6dbbb7fe32c1dadaf8b/LICENSE)；仓库同时保留许可证副本。生成器只保留 2–24 个小写英文字母组成的词并自动去重。
 
-为让超级雪花有足够明显、足够多样的长词，游戏另外维护一小组 18–24 字母的长词挑战补充，并合入三本学术词册。它们是游戏内容，不应被理解为 ECDICT 标注的四级、六级或考研词汇。重新生成 ECDICT 数据可运行：
+为让超级雪花有足够明显、足够多样的长词，游戏另外维护一小组 18–24 字母的长词挑战补充，并只合入四级、六级和考研三本词册。它们是游戏内容，不应被理解为 ECDICT 标注的四级、六级或考研词汇。重新生成 ECDICT 数据可运行：
 
 ```bash
 npm run generate:wordbooks

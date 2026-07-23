@@ -11,8 +11,8 @@ export type WordbookId =
   | "cet4"
   | "cet6"
   | "postgraduate"
-  | "conceptStarter"
-  | "conceptProgress"
+  | "toefl"
+  | "sat"
   | "mixed";
 export type RoomPhase = "lobby" | "countdown" | "playing" | "ended";
 

@@ -24,7 +24,7 @@ function createEngine({ random = () => 0.5, words = TEST_BOOK, name = "房主" }
     name,
     now: 0,
     random,
-    wordbooks: { winter: words },
+    wordbooks: { cet4: words, winter: words },
   });
 }
 
@@ -64,6 +64,7 @@ function typeWord(engine, sessionId, word, now) {
 
 test("creates a six-character room with eight stable seats and admits at most eight humans", () => {
   const engine = createEngine();
+  assert.equal(engine.snapshot(0).config.wordbookId, "cet4");
   assert.equal(engine.snapshot(0, HOST_SESSION).selfPlayerId, "pine-0");
   assert.equal(engine.snapshot(0, HOST_SESSION).players.find((player) => player.id === "pine-0")?.position, 2);
   assert.equal(engine.serialize().state.players.length, 8);
@@ -86,6 +87,39 @@ test("creates a six-character room with eight stable seats and admits at most ei
   assert.equal(ninth.ok, false);
   assert.equal(ninth.code, "ROOM_FULL");
   assert.equal(engine.snapshot(11).humanCount, 8);
+});
+
+test("supports SAT and TOEFL while retired situational books restore to the CET-4 default", () => {
+  const engine = createEngine();
+  assert.equal(
+    engine.handleCommand(HOST_SESSION, { op: "lobby.set_config", config: { wordbookId: "sat" } }, 1).ok,
+    true,
+  );
+  assert.equal(engine.snapshot(1).config.wordbookId, "sat");
+  assert.equal(
+    engine.handleCommand(HOST_SESSION, { op: "lobby.set_config", config: { wordbookId: "toefl" } }, 2).ok,
+    true,
+  );
+  assert.equal(engine.snapshot(2).config.wordbookId, "toefl");
+
+  const serialized = engine.serialize();
+  serialized.state.config.wordbookId = "conceptStarter";
+  serialized.state.wordBagBookId = "conceptProgress";
+  serialized.state.wordBag = ["family"];
+  serialized.state.frostWordBag = ["conversation"];
+  serialized.state.recentWords = ["family"];
+  serialized.state.recentFrostWords = ["conversation"];
+
+  const restored = RoomEngine.restore(serialized, {
+    random: () => 0.5,
+    wordbooks: { cet4: TEST_BOOK },
+  });
+  assert.equal(restored.snapshot(3).config.wordbookId, "cet4");
+  assert.equal(restored.serialize().state.wordBagBookId, "cet4");
+  assert.deepEqual(restored.serialize().state.wordBag, []);
+  assert.deepEqual(restored.serialize().state.frostWordBag, []);
+  assert.deepEqual(restored.serialize().state.recentWords, []);
+  assert.deepEqual(restored.serialize().state.recentFrostWords, []);
 });
 
 test("custom human names are unique while colliding AI names receive a distinct suffix", () => {

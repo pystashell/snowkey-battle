@@ -22,8 +22,8 @@ const ROOM_ENGINE_OPTIONS = {
     cet4: WORD_BOOKS.cet4.words,
     cet6: WORD_BOOKS.cet6.words,
     postgraduate: WORD_BOOKS.postgraduate.words,
-    conceptStarter: WORD_BOOKS.conceptStarter.words,
-    conceptProgress: WORD_BOOKS.conceptProgress.words,
+    toefl: WORD_BOOKS.toefl.words,
+    sat: WORD_BOOKS.sat.words,
     mixed: WORD_BOOKS.mixed.words,
   },
 } as const;

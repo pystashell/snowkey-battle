@@ -1,6 +1,6 @@
 # SnowKey Battle project context
 
-Last handoff update: 2026-07-23
+Last handoff update: 2026-07-24
 
 ## Product goal
 
@@ -17,7 +17,7 @@ Current product rules that should be treated as established decisions:
 - Packing, impact, and knockdown have synchronized game sound effects. Packing and impact are 0.18/0.19-second synthesized transients with same-kind throttling. Four locally bundled CC0 winter tracks are split into lobby and battle pools; each scene remembers its own selection or shuffle mode. Every track shows its author, CC0 license, and original OpenGameArt source in the music menu. User-provided Aigei victory and defeat cues play once from the current player's perspective at match end, can be previewed from the same panel, and retain their source terms rather than being relicensed as project CC0 assets.
 - Music has pause/resume, a persistent 50%-by-default master level (half the previous tuned output), and a separate persistent SFX level. Music and SFX can also be disabled independently.
 - The selected book's ten longest words rotate without replacement as Super Snowflakes. They hit every living opponent for 15 damage and freeze survivors for one second.
-- CET-4, CET-6, and Postgraduate English data is generated from ECDICT revision `bc015ed2e24a7abef49fc6dbbb7fe32c1dadaf8b`. The separate 18-24-letter challenge words are game content, not an official exam syllabus.
+- CET-4 is the default wordbook. The selector orders CET-4, CET-6, Postgraduate, TOEFL, then SAT-oriented by difficulty; the two former small situational books are retired. All five academic books are generated from ECDICT revision `bc015ed2e24a7abef49fc6dbbb7fe32c1dadaf8b`. TOEFL uses the source `toefl` tag, while SAT combines TOEFL/IELTS tags and is not an official College Board list. Separate 18-24-letter challenge additions remain game content only in the CET-4, CET-6, and Postgraduate books.
 - The room service uses a 15-second ping, reconnect backoff of 0.5/1/2/4/7.5/10 seconds, a 60-second disconnect grace period, and a six-hour idle-room fallback TTL.
 
 ## Current architecture

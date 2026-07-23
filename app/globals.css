@@ -592,6 +592,52 @@ select:focus-visible {
   gap: 11px;
 }
 
+/*
+ * Keep every battle control inside the visible browser height. A min-height
+ * alone lets the arena keep its 420px floor and pushes the typing dock below
+ * shorter desktop viewports. The arena is the flexible region; the header,
+ * health board, and typing dock must remain reachable without page scrolling.
+ */
+.game-shell--battle {
+  height: var(--game-visual-viewport-height, 100dvh);
+  min-height: var(--game-visual-viewport-height, 100dvh);
+  max-height: var(--game-visual-viewport-height, 100dvh);
+}
+
+.game-shell--battle .match {
+  height: 100%;
+  min-height: 0;
+}
+
+.game-shell--battle .arena {
+  min-height: 0;
+}
+
+/*
+ * Short desktop windows reclaim space in two predictable steps. Keep these
+ * breakpoints above the mobile layout so a phone with its keyboard closed
+ * still shows the match chrome requested for that state.
+ */
+@media (hover: hover) and (pointer: fine) and (min-width: 821px) and (max-height: 800px) {
+  .game-shell--battle > .language-switcher,
+  .game-shell--battle > .audio-controls,
+  .game-shell--battle .match-header {
+    display: none;
+  }
+
+  .game-shell--battle .match {
+    padding-top: 10px;
+    padding-bottom: 12px;
+    gap: 8px;
+  }
+}
+
+@media (hover: hover) and (pointer: fine) and (min-width: 821px) and (max-height: 640px) {
+  .game-shell--battle .scoreboard {
+    display: none;
+  }
+}
+
 .match-header {
   min-height: 54px;
   display: grid;
@@ -4516,13 +4562,16 @@ select:focus-visible {
   }
 
   .compact-keyboard__row--2 {
-    width: 92%;
+    width: 90%;
     grid-template-columns: repeat(9, minmax(0, 1fr));
   }
 
   .compact-keyboard__row--3 {
-    width: 96%;
-    grid-template-columns: repeat(7, minmax(0, 1fr)) minmax(52px, 1.8fr);
+    width: 95.5%;
+    grid-template-columns:
+      minmax(0, 1.35fr)
+      repeat(7, minmax(0, 1fr))
+      minmax(0, 1.35fr);
   }
 
   .compact-keyboard__key {
@@ -4541,6 +4590,17 @@ select:focus-visible {
     touch-action: manipulation;
     user-select: none;
     -webkit-user-select: none;
+  }
+
+  .compact-keyboard__key--shift {
+    display: grid;
+    place-items: center;
+    color: #33495a;
+    background: #b8c5cc;
+    box-shadow: 0 2px 0 #78909a;
+    font-family: var(--font-body);
+    font-size: 19px;
+    pointer-events: none;
   }
 
   .compact-keyboard__key:active:not(:disabled) {

@@ -17,6 +17,13 @@ import { LanguageSwitcher, useLanguage } from "./LanguageContext";
 import type { UiLanguage } from "./language";
 import { useGameAudio } from "./useGameAudio";
 import { resolvePersonalOutcome } from "./game-audio";
+import {
+  COMPACT_KEYBOARD_LAYOUT,
+  MOBILE_KEYBOARD_MEDIA_QUERY,
+  MOBILE_KEYBOARD_STORAGE_KEY,
+  resolveMobileKeyboardMode,
+  type MobileKeyboardMode,
+} from "./mobile-keyboard";
 import { useRoomSocket } from "./useRoomSocket";
 import { WORD_BOOKS, WORD_BOOK_OPTIONS, type WordbookId } from "./wordbooks";
 import {
@@ -42,7 +49,6 @@ type Team = "pine" | "berry";
 type Stage = "lobby" | "countdown" | "playing" | "paused" | "ended";
 type SnowfallLevel = "light" | "classic" | "blizzard";
 type GameMode = "local" | "online";
-type MobileKeyboardMode = "system" | "compact";
 
 type Player = {
   id: string;
@@ -187,13 +193,6 @@ const FROST_FREEZE_MS = 1_000;
 const WORD_START_Y = 7;
 const WORD_GROUND_TTL_MS = 2_000;
 const WORD_MELT_ANIMATION_MS = 350;
-const MOBILE_KEYBOARD_MEDIA_QUERY = "(max-width: 560px), (max-width: 1120px) and (max-height: 600px)";
-const MOBILE_KEYBOARD_STORAGE_KEY = "snowkey-battle:mobile-keyboard";
-const COMPACT_KEYBOARD_ROWS = [
-  ["q", "w", "e", "r", "t", "y", "u", "i", "o", "p"],
-  ["a", "s", "d", "f", "g", "h", "j", "k", "l"],
-  ["z", "x", "c", "v", "b", "n", "m"],
-] as const;
 
 const ENGLISH_ROOM_ERRORS: Record<string, string> = {
   INVALID_NAME: "Enter your name before creating or joining a room.",
@@ -812,7 +811,7 @@ export default function SnowballGame() {
   const [playerName, setPlayerName] = useState(language === "zh" ? "小雪球" : "Snowball");
   const [onlinePlayerName, setOnlinePlayerName] = useState("");
   const [roomCodeInput, setRoomCodeInput] = useState("");
-  const [wordbookId, setWordbookId] = useState<WordbookId>("winter");
+  const [wordbookId, setWordbookId] = useState<WordbookId>("cet4");
   const [snowfallLevel, setSnowfallLevel] = useState<SnowfallLevel>("classic");
   const [players, setPlayers] = useState<Player[]>(() => createInitialPlayers());
   const [words, setWords] = useState<SnowWord[]>([]);
@@ -873,6 +872,7 @@ export default function SnowballGame() {
   const fallingPlayerIdsRef = useRef(new Set<string>());
   const fallenPlayerIdsRef = useRef(new Set<string>());
   const playedRoomAudioEventsRef = useRef(new Set<string>());
+  const mobileKeyboardPreferenceRef = useRef<MobileKeyboardMode | null>(null);
   const isOnline = gameMode === "online" || room.status !== "idle";
   const onlineSnapshot = isOnline ? room.snapshot : null;
   const onlineServerTimeOffsetMs = room.serverTimeOffsetMs;
@@ -892,24 +892,27 @@ export default function SnowballGame() {
 
   useEffect(() => {
     const mediaQuery = window.matchMedia(MOBILE_KEYBOARD_MEDIA_QUERY);
-    const syncAvailability = () => setMobileKeyboardAvailable(mediaQuery.matches);
-    let preferenceTimer: number | null = null;
-
-    syncAvailability();
     try {
       const storedMode = window.localStorage.getItem(MOBILE_KEYBOARD_STORAGE_KEY);
       if (storedMode === "system" || storedMode === "compact") {
-        preferenceTimer = window.setTimeout(() => setMobileKeyboardMode(storedMode), 0);
+        mobileKeyboardPreferenceRef.current = storedMode;
       }
     } catch {
       // Storage can be unavailable in a private or restricted embedded browser.
     }
 
-    mediaQuery.addEventListener("change", syncAvailability);
-    return () => {
-      if (preferenceTimer !== null) window.clearTimeout(preferenceTimer);
-      mediaQuery.removeEventListener("change", syncAvailability);
+    const syncAvailability = () => {
+      const available = mediaQuery.matches;
+      setMobileKeyboardAvailable(available);
+      setMobileKeyboardMode(resolveMobileKeyboardMode(
+        mobileKeyboardPreferenceRef.current,
+        available,
+      ));
     };
+    syncAvailability();
+
+    mediaQuery.addEventListener("change", syncAvailability);
+    return () => mediaQuery.removeEventListener("change", syncAvailability);
   }, []);
 
   useEffect(() => {
@@ -2382,6 +2385,7 @@ export default function SnowballGame() {
       setTypingInputFocused(false);
       window.requestAnimationFrame(() => window.scrollTo(0, 0));
     }
+    mobileKeyboardPreferenceRef.current = nextMode;
     setMobileKeyboardMode(nextMode);
     try {
       window.localStorage.setItem(MOBILE_KEYBOARD_STORAGE_KEY, nextMode);
@@ -3038,18 +3042,26 @@ export default function SnowballGame() {
                 className="compact-keyboard"
                 aria-label={text("精简英文键盘", "Compact English keyboard")}
               >
-                {COMPACT_KEYBOARD_ROWS.map((row, rowIndex) => (
+                {COMPACT_KEYBOARD_LAYOUT.map((row, rowIndex) => (
                   <div
-                    key={row.join("")}
+                    key={row.letters.join("")}
                     className={`compact-keyboard__row compact-keyboard__row--${rowIndex + 1}`}
                   >
-                    {row.map((letter) => (
+                    {row.leadingKey === "shift" && (
+                      <span
+                        className="compact-keyboard__key compact-keyboard__key--shift"
+                        aria-hidden="true"
+                      >
+                        ⇧
+                      </span>
+                    )}
+                    {row.letters.map((letter) => (
                       <button
                         key={letter}
                         type="button"
                         className="compact-keyboard__key"
                         disabled={typingDisabled}
-                        aria-label={letter.toUpperCase()}
+                        aria-label={letter}
                         onPointerDown={(event) => {
                           event.preventDefault();
                           applyTypingKey(letter);
@@ -3058,10 +3070,10 @@ export default function SnowballGame() {
                           if (event.detail === 0) applyTypingKey(letter);
                         }}
                       >
-                        {letter.toUpperCase()}
+                        {letter}
                       </button>
                     ))}
-                    {rowIndex === COMPACT_KEYBOARD_ROWS.length - 1 && (
+                    {row.trailingKey === "clear" && (
                       <button
                         type="button"
                         className="compact-keyboard__key compact-keyboard__key--clear"

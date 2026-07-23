@@ -10,11 +10,15 @@
     "build": "vinext build",
     "start": "wrangler dev --config dist/server/wrangler.json",
     "preview": "npm run build && npm run start",
-    "test": "npm run test:audio && npm run typecheck && npm run build && node --experimental-strip-types --test tests/language.test.mjs && node --test tests/rendered-html.test.mjs && npm run test:word-pools && npm run test:engine",
+    "test": "npm run test:audio && npm run test:mobile-keyboard && npm run test:layout && npm run typecheck && npm run build && node --experimental-strip-types --test tests/language.test.mjs && node --test tests/rendered-html.test.mjs && npm run test:word-pools && npm run test:engine",
     "test:audio": "node --experimental-strip-types --test tests/game-audio.test.mjs",
+    "test:mobile-keyboard": "node --experimental-strip-types --test tests/mobile-keyboard.test.mjs",
+    "test:layout": "node --test tests/responsive-layout.test.mjs",
     "test:engine": "node --experimental-strip-types --test tests/room-engine.test.mjs",
     "test:word-pools": "node --experimental-strip-types --test tests/word-pools.test.mjs",
-    "test:live": "node tests/live-room-smoke.mjs",
+    "test:live": "npm run test:live:smoke && npm run test:live:reclaim",
+    "test:live:smoke": "node tests/live-room-smoke.mjs",
+    "test:live:reclaim": "node tests/live-room-reclaim.mjs",
     "generate:wordbooks": "node scripts/generate-exam-wordbooks.mjs",
     "lint": "eslint . --ignore-pattern dist --ignore-pattern .next --ignore-pattern worker-configuration.d.ts",
     "typecheck": "wrangler types --check && tsc --noEmit --incremental false",
@@ -44,7 +48,8 @@
     "typescript": "5.9.3",
     "vinext": "0.0.50",
     "vite": "8.0.13",
-    "wrangler": "4.92.0"
+    "wrangler": "4.92.0",
+    "ws": "8.18.0"
   },
   "type": "module"
 }
