@@ -12,6 +12,18 @@ export type MusicTrack = Readonly<{
   scene: MusicScene;
 }>;
 
+export type GameOutcome = "victory" | "defeat";
+
+export type OutcomeMusicTrack = Readonly<{
+  id: string;
+  title: string;
+  artist: string;
+  src: string;
+  sourceUrl: string;
+  license: string;
+  outcome: GameOutcome;
+}>;
+
 export const MUSIC_TRACKS: readonly MusicTrack[] = Object.freeze([
   Object.freeze({
     id: "wintery-loop",
@@ -55,6 +67,35 @@ export const DEFAULT_MUSIC_TRACK_IDS: Readonly<Record<MusicScene, string>> = Obj
   lobby: "happy-synths",
   battle: "black-diamond",
 });
+
+export const OUTCOME_MUSIC_TRACKS: Readonly<Record<GameOutcome, OutcomeMusicTrack>> = Object.freeze({
+  victory: Object.freeze({
+    id: "aigei-game-victory",
+    title: "游戏胜利提示音效",
+    artist: "爱给网 / Aigei.com",
+    src: "/audio/music/aigei-game-victory.mp3",
+    sourceUrl: "https://www.aigei.com/sound/class/you_xi_she_72/",
+    license: "许可见来源 / See source terms",
+    outcome: "victory",
+  }),
+  defeat: Object.freeze({
+    id: "aigei-game-defeat-1683890",
+    title: "游戏失败",
+    artist: "爱给网 / Aigei.com",
+    src: "/audio/music/aigei-game-defeat-1683890.mp3",
+    sourceUrl: "https://www.aigei.com/sound/class/wan_you_xi_38/",
+    license: "许可见来源 / See source terms",
+    outcome: "defeat",
+  }),
+});
+
+export function resolvePersonalOutcome(
+  winner: "pine" | "berry" | null,
+  playerTeam: "pine" | "berry" | null,
+): GameOutcome | null {
+  if (!winner || !playerTeam) return null;
+  return winner === playerTeam ? "victory" : "defeat";
+}
 
 export const DEFAULT_MUSIC_VOLUME = 0.5;
 export const DEFAULT_SFX_VOLUME = 0.5;
@@ -103,6 +144,8 @@ export type GameAudioState = Readonly<{
   selectedTrackIds: SceneTrackIds;
   currentTrackId: string | null;
   currentTrack: MusicTrack | null;
+  activeOutcome: GameOutcome | null;
+  previewingOutcome: boolean;
   isPlaying: boolean;
   isPaused: boolean;
   blocked: boolean;
@@ -123,6 +166,7 @@ type TimerHandle = ReturnType<typeof setTimeout>;
 
 export type GameAudioControllerOptions = {
   tracks?: readonly MusicTrack[];
+  outcomeTracks?: Readonly<Record<GameOutcome, OutcomeMusicTrack>>;
   random?: () => number;
   now?: () => number;
   audioFactory?: AudioFactory;
@@ -151,6 +195,8 @@ const DEFAULT_STATE: GameAudioState = Object.freeze({
   selectedTrackIds: DEFAULT_SELECTED_TRACK_IDS,
   currentTrackId: null,
   currentTrack: null,
+  activeOutcome: null,
+  previewingOutcome: false,
   isPlaying: false,
   isPaused: false,
   blocked: false,
@@ -294,6 +340,7 @@ type ActiveSfx = {
 
 export class GameAudioController {
   readonly tracks: readonly MusicTrack[];
+  readonly outcomeTracks: Readonly<Record<GameOutcome, OutcomeMusicTrack>>;
 
   private readonly random: () => number;
   private readonly now: () => number;
@@ -319,6 +366,7 @@ export class GameAudioController {
 
   constructor(options: GameAudioControllerOptions = {}) {
     this.tracks = options.tracks ?? MUSIC_TRACKS;
+    this.outcomeTracks = options.outcomeTracks ?? OUTCOME_MUSIC_TRACKS;
     this.random = options.random ?? Math.random;
     this.now = options.now ?? Date.now;
     this.audioFactory = options.audioFactory ?? browserAudioFactory;
@@ -364,6 +412,8 @@ export class GameAudioController {
       selectedTrackIds,
       currentTrackId: initialTrack?.id ?? null,
       currentTrack: initialTrack,
+      activeOutcome: null,
+      previewingOutcome: false,
       isPlaying: false,
       isPaused: false,
       blocked: false,
@@ -390,6 +440,12 @@ export class GameAudioController {
       || this.state.isPaused
       || this.destroyed
     ) return false;
+    if (this.state.activeOutcome) {
+      return this.startOutcomeTrack(
+        this.outcomeTracks[this.state.activeOutcome],
+        this.state.previewingOutcome,
+      );
+    }
     return this.playSceneMusic(this.state.musicScene, false);
   }
 
@@ -398,6 +454,7 @@ export class GameAudioController {
     if (this.destroyed) return false;
     const changed = scene !== this.state.musicScene;
     const wasPreviewing = this.state.previewingScene !== null;
+    const wasPlayingOutcome = this.state.activeOutcome !== null;
     this.clearPreviewTimer();
     const track = this.chooseSceneTrack(scene, changed);
     this.update({
@@ -405,6 +462,8 @@ export class GameAudioController {
       previewingScene: null,
       currentTrackId: track?.id ?? null,
       currentTrack: track,
+      activeOutcome: null,
+      previewingOutcome: false,
       blocked: false,
     });
     if (
@@ -413,14 +472,14 @@ export class GameAudioController {
       || this.state.isPaused
       || !track
     ) {
-      if (changed || wasPreviewing) {
+      if (changed || wasPreviewing || wasPlayingOutcome) {
         this.playRequest += 1;
         safelyPause(this.music);
         this.update({ isPlaying: false });
       }
       return false;
     }
-    if (!changed && !wasPreviewing && this.state.isPlaying) return true;
+    if (!changed && !wasPreviewing && !wasPlayingOutcome && this.state.isPlaying) return true;
     return this.startTrack(track, null);
   }
 
@@ -442,6 +501,8 @@ export class GameAudioController {
       isPaused: false,
       selectedTrackIds,
       randomModeByScene,
+      activeOutcome: null,
+      previewingOutcome: false,
       blocked: false,
     });
     this.persist();
@@ -467,6 +528,8 @@ export class GameAudioController {
       musicEnabled: true,
       isPaused: false,
       randomModeByScene,
+      activeOutcome: null,
+      previewingOutcome: false,
       blocked: false,
     });
     this.persist();
@@ -477,6 +540,9 @@ export class GameAudioController {
   async playNext() {
     if (!this.mounted) this.mount();
     if (!this.tracks.length || this.destroyed) return false;
+    if (this.state.activeOutcome) {
+      return this.playSceneMusic(this.state.musicScene, false);
+    }
     const scene = this.state.previewingScene ?? this.state.musicScene;
     if (this.state.randomModeByScene[scene]) return this.playRandom(scene);
     const pool = this.tracksForScene(scene);
@@ -507,6 +573,12 @@ export class GameAudioController {
     this.unlocked = true;
     this.update({ musicEnabled: true, isPaused: false, blocked: false });
     this.persist();
+    if (this.state.activeOutcome) {
+      return this.startOutcomeTrack(
+        this.outcomeTracks[this.state.activeOutcome],
+        this.state.previewingOutcome,
+      );
+    }
     return this.playSceneMusic(this.state.musicScene, false);
   }
 
@@ -535,7 +607,47 @@ export class GameAudioController {
     this.unlocked = true;
     this.update({ musicEnabled: true, isPaused: false, blocked: false });
     this.persist();
+    if (this.state.activeOutcome) {
+      return this.startOutcomeTrack(
+        this.outcomeTracks[this.state.activeOutcome],
+        this.state.previewingOutcome,
+      );
+    }
     return this.playSceneMusic(this.state.musicScene, false);
+  }
+
+  async playOutcomeMusic(outcome: GameOutcome) {
+    if (!this.mounted) this.mount();
+    if (this.destroyed) return false;
+    if (this.state.activeOutcome === outcome && !this.state.previewingOutcome) {
+      return this.state.isPlaying;
+    }
+    const track = this.outcomeTracks[outcome];
+    this.clearPreviewTimer();
+    this.update({
+      currentTrackId: track.id,
+      currentTrack: null,
+      activeOutcome: outcome,
+      previewingOutcome: false,
+      previewingScene: null,
+      blocked: false,
+    });
+    if (!this.unlocked || !this.state.musicEnabled || this.state.isPaused) {
+      this.playRequest += 1;
+      safelyPause(this.music);
+      this.update({ isPlaying: false });
+      return false;
+    }
+    return this.startOutcomeTrack(track, false);
+  }
+
+  async previewOutcomeMusic(outcome: GameOutcome) {
+    if (!this.mounted) this.mount();
+    if (this.destroyed) return false;
+    this.unlocked = true;
+    this.update({ musicEnabled: true, isPaused: false, blocked: false });
+    this.persist();
+    return this.startOutcomeTrack(this.outcomeTracks[outcome], true);
   }
 
   toggleSfx(force?: boolean) {
@@ -647,6 +759,8 @@ export class GameAudioController {
       previewingScene: null,
       currentTrackId: track?.id ?? null,
       currentTrack: track,
+      activeOutcome: null,
+      previewingOutcome: false,
     });
     if (!track) return false;
     return this.startTrack(track, null);
@@ -666,6 +780,8 @@ export class GameAudioController {
     this.update({
       currentTrackId: track.id,
       currentTrack: track,
+      activeOutcome: null,
+      previewingOutcome: false,
       previewingScene,
       isPlaying: false,
       blocked: false,
@@ -675,6 +791,38 @@ export class GameAudioController {
       if (request !== this.playRequest || this.destroyed) return false;
       this.update({ isPlaying: true, blocked: false });
       if (previewingScene !== null) this.schedulePreviewEnd();
+      return true;
+    } catch (error) {
+      if (request !== this.playRequest || this.destroyed) return false;
+      this.update({ isPlaying: false, blocked: isPlaybackBlocked(error) });
+      return false;
+    }
+  }
+
+  private async startOutcomeTrack(track: OutcomeMusicTrack, previewing: boolean) {
+    if (!this.state.musicEnabled || this.state.isPaused || this.destroyed) return false;
+    if (!this.mounted) this.mount();
+    const audio = this.music;
+    if (!audio) return false;
+    const request = ++this.playRequest;
+    this.clearPreviewTimer();
+    safelyPause(audio);
+    audio.loop = false;
+    audio.src = track.src;
+    this.applyMusicVolume();
+    this.update({
+      currentTrackId: track.id,
+      currentTrack: null,
+      activeOutcome: track.outcome,
+      previewingOutcome: previewing,
+      previewingScene: null,
+      isPlaying: false,
+      blocked: false,
+    });
+    try {
+      await Promise.resolve(audio.play());
+      if (request !== this.playRequest || this.destroyed) return false;
+      this.update({ isPlaying: true, blocked: false });
       return true;
     } catch (error) {
       if (request !== this.playRequest || this.destroyed) return false;
@@ -746,6 +894,12 @@ export class GameAudioController {
   private handleMusicEnded = () => {
     this.update({ isPlaying: false });
     if (!this.state.musicEnabled || this.state.isPaused || this.destroyed) return;
+    if (this.state.activeOutcome !== null) {
+      if (this.state.previewingOutcome) {
+        void this.playSceneMusic(this.state.musicScene, false);
+      }
+      return;
+    }
     if (this.state.previewingScene !== null) {
       this.finishPreview();
       return;

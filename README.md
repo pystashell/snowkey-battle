@@ -15,7 +15,7 @@ SnowKey Battle is a browser remake of a childhood multiplayer typing game. Engli
 - When the host leaves, ownership passes to the earliest remaining human by join order—never to AI.
 - English-only typing with seven built-in wordbooks, including large CET-4, CET-6, and Postgraduate English collections.
 - Fully animated catch, pack, wind-up, throw, flight, hit, freeze, and knockdown states.
-- Original short snowball sound effects plus four locally bundled CC0 winter tracks, split into separate lobby and battle choices with scene-aware shuffle, pause, volume, and independent music/SFX switches.
+- Original short snowball sound effects, four locally bundled CC0 winter background tracks, and user-provided Aigei victory/defeat cues, with scene-aware shuffle, pause, volume, and independent music/SFX switches.
 - Super Snowflakes use rotating long words, hit the whole enemy team for 15 damage, and freeze survivors for one second.
 - Chinese and English interfaces selected from the browser language, with a visible manual switch.
 
@@ -85,9 +85,11 @@ The music menu always shows the current track, artist, CC0 license, and original
 
 Music can be paused or disabled, sound effects can be disabled independently, and both have persistent volume sliders. The default music slider is 50%, producing half of the previous tuned output level. The packing and hit sounds are 0.18 and 0.19 seconds respectively, use reduced gain, and limit same-kind overlap during busy battles.
 
+At the result screen, the battle track stops and a one-shot cue plays from the current player's perspective: `游戏胜利提示音效` for a win or `游戏失败` for a loss. Both user-provided Aigei cues can be previewed in the music panel and obey the same music switch, pause control, and volume slider.
+
 Browsers may wait for the first click or key press before allowing sound.
 
-All music is bundled locally and was published as CC0 on OpenGameArt. The three game sound effects are reproducible, original synthesized waveforms released as CC0 by this project. See [`public/audio/AUDIO_LICENSES.md`](public/audio/AUDIO_LICENSES.md) for the complete source and license record.
+All audio is bundled locally. The four background tracks were published as CC0 on OpenGameArt, while the three game sound effects are reproducible original synthesized waveforms released as CC0 by this project. The two result cues are user-provided Aigei downloads and retain their source terms; they are not relicensed as CC0 by this repository. See [`public/audio/AUDIO_LICENSES.md`](public/audio/AUDIO_LICENSES.md) for the complete source and license record.
 
 ## Wordbook data
 
@@ -119,6 +121,7 @@ npm run generate:wordbooks
 - 房主主动离开后，房主身份严格按加入顺序交给下一位真人，永远不会交给 AI。
 - 抢到单词后会完整播放抓取、攥雪球、蓄力投掷、飞行和受击动画。
 - 大厅与战斗分别选择并记住音乐：大厅默认播放轻快的 `Happy Synths`，倒计时开始后切换到更有冲劲的 `Black Diamond`；每首歌都显示作者、CC0 许可和 OpenGameArt 出处，并支持分场景随机、暂停/继续、音乐与音效独立开关和独立音量。
+- 进入结算画面时，系统会从当前玩家视角自动播放一次用户提供的爱给网胜利音 `游戏胜利提示音效` 或失败音 `游戏失败`；两段音乐都能在声音面板试听，并受音乐开关、暂停和音乐音量统一控制。
 - 攥雪球与雪球命中音效分别只有 0.18 秒和 0.19 秒，同类声音会限制并发，避免多人连续投掷时叠成持续噪声。
 
 ## 判定与数值

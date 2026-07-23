@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { readFile, readdir } from "node:fs/promises";
 import test from "node:test";
 
@@ -11,9 +12,11 @@ import {
   MUSIC_OUTPUT_GAIN,
   MUSIC_PREVIEW_DURATION_MS,
   MUSIC_TRACKS,
+  OUTCOME_MUSIC_TRACKS,
   SFX_OUTPUT_GAINS,
   SFX_SOURCES,
   pickRandomTrack,
+  resolvePersonalOutcome,
 } from "../app/game-audio.ts";
 
 class FakeAudio {
@@ -126,6 +129,59 @@ function readWavDuration(buffer) {
   return dataSize / (sampleRate * channels * (bitsPerSample / 8));
 }
 
+function readMp3Duration(buffer) {
+  const mpeg1Layer3Bitrates = [0, 32, 40, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320, 0];
+  const mpeg2Layer3Bitrates = [0, 8, 16, 24, 32, 40, 48, 56, 64, 80, 96, 112, 128, 144, 160, 0];
+  const baseSampleRates = [44_100, 48_000, 32_000];
+  let offset = 0;
+  let duration = 0;
+  let frameCount = 0;
+
+  if (buffer.toString("ascii", 0, 3) === "ID3" && buffer.length >= 10) {
+    const tagSize = ((buffer[6] & 0x7f) << 21)
+      | ((buffer[7] & 0x7f) << 14)
+      | ((buffer[8] & 0x7f) << 7)
+      | (buffer[9] & 0x7f);
+    offset = 10 + tagSize;
+  }
+
+  while (offset + 4 <= buffer.length) {
+    const header = buffer.readUInt32BE(offset);
+    if (((header & 0xffe00000) >>> 0) !== 0xffe00000) {
+      offset += 1;
+      continue;
+    }
+    const versionBits = (header >>> 19) & 0x3;
+    const layerBits = (header >>> 17) & 0x3;
+    const bitrateIndex = (header >>> 12) & 0xf;
+    const sampleRateIndex = (header >>> 10) & 0x3;
+    const padding = (header >>> 9) & 0x1;
+    if (versionBits === 1 || layerBits !== 1 || bitrateIndex === 0 || bitrateIndex === 15 || sampleRateIndex === 3) {
+      offset += 1;
+      continue;
+    }
+    const isMpeg1 = versionBits === 3;
+    const sampleRateDivisor = isMpeg1 ? 1 : versionBits === 2 ? 2 : 4;
+    const sampleRate = baseSampleRates[sampleRateIndex] / sampleRateDivisor;
+    const bitrate = (isMpeg1 ? mpeg1Layer3Bitrates : mpeg2Layer3Bitrates)[bitrateIndex];
+    const frameLength = Math.floor((isMpeg1 ? 144_000 : 72_000) * bitrate / sampleRate) + padding;
+    if (frameLength <= 4 || offset + frameLength > buffer.length + 4) {
+      offset += 1;
+      continue;
+    }
+    duration += (isMpeg1 ? 1_152 : 576) / sampleRate;
+    frameCount += 1;
+    offset += frameLength;
+  }
+
+  assert.ok(frameCount > 0, "expected at least one valid MP3 frame");
+  return duration;
+}
+
+function sha256(buffer) {
+  return createHash("sha256").update(buffer).digest("hex").toUpperCase();
+}
+
 test("the four packaged tracks are split into cheerful lobby and stronger battle pools", async () => {
   assert.equal(MUSIC_TRACKS.length, 4);
   assert.equal(new Set(MUSIC_TRACKS.map((track) => track.id)).size, 4);
@@ -144,9 +200,9 @@ test("the four packaged tracks are split into cheerful lobby and stronger battle
   assert.ok(MUSIC_TRACKS.every((track) => track.artist && track.sourceUrl && track.license === "CC0 1.0"));
   assert.ok(MUSIC_TRACKS.every((track) => track.sourceUrl.startsWith("https://opengameart.org/content/")));
   const packagedFiles = (await readdir(new URL("../public/audio/music/", import.meta.url)))
-    .filter((fileName) => fileName.endsWith(".mp3"))
+    .filter((fileName) => /\.(mp3|wav)$/u.test(fileName))
     .sort();
-  const configuredFiles = MUSIC_TRACKS
+  const configuredFiles = [...MUSIC_TRACKS, ...Object.values(OUTCOME_MUSIC_TRACKS)]
     .map((track) => track.src.split("/").at(-1))
     .sort();
   assert.deepEqual(packagedFiles, configuredFiles);
@@ -161,6 +217,32 @@ test("a stored selection for a removed track falls back to the current battle de
   controller.mount();
   assert.equal(controller.getSnapshot().selectedTrackIds.battle, "black-diamond");
   controller.destroy();
+});
+
+test("personal match results resolve to victory or defeat from the current player's team", () => {
+  assert.equal(resolvePersonalOutcome("pine", "pine"), "victory");
+  assert.equal(resolvePersonalOutcome("berry", "pine"), "defeat");
+  assert.equal(resolvePersonalOutcome(null, "pine"), null);
+  assert.equal(resolvePersonalOutcome("pine", null), null);
+});
+
+test("user-provided Aigei victory and defeat cues are packaged with source records", async () => {
+  assert.deepEqual(Object.keys(OUTCOME_MUSIC_TRACKS), ["victory", "defeat"]);
+  assert.deepEqual(
+    Object.values(OUTCOME_MUSIC_TRACKS).map((track) => track.src),
+    ["/audio/music/aigei-game-victory.mp3", "/audio/music/aigei-game-defeat-1683890.mp3"],
+  );
+  assert.ok(Object.values(OUTCOME_MUSIC_TRACKS).every(
+    (track) => track.artist.includes("Aigei.com")
+      && track.sourceUrl.startsWith("https://www.aigei.com/")
+      && track.license.includes("See source terms"),
+  ));
+  const victory = await readFile(new URL("../public/audio/music/aigei-game-victory.mp3", import.meta.url));
+  const defeat = await readFile(new URL("../public/audio/music/aigei-game-defeat-1683890.mp3", import.meta.url));
+  assert.ok(readMp3Duration(victory) >= 5 && readMp3Duration(victory) <= 7);
+  assert.ok(readMp3Duration(defeat) >= 1 && readMp3Duration(defeat) <= 3);
+  assert.equal(sha256(victory), "AFD9105E37B20539D615F9CD47BD615F007BCB55BE2AC404A42DA972989620AA");
+  assert.equal(sha256(defeat), "3FA38C733714BAD345989CA2BE27C96578EBEF18EA75CD2FCAEB314585DD411C");
 });
 
 test("random selection avoids the current track whenever another track exists", () => {
@@ -232,6 +314,64 @@ test("scene choices persist separately and another-scene selection previews for 
 
   await controller.setMusicScene("battle");
   assert.equal(audios[0].src, "/audio/music/black-diamond.mp3");
+  controller.destroy();
+});
+
+test("match results interrupt battle music once while manual outcome previews return to the scene", async () => {
+  const { audios, controller } = createHarness();
+  controller.mount();
+  await controller.notifyUserInteraction();
+  await controller.setMusicScene("battle");
+  const music = audios[0];
+
+  assert.equal(await controller.playOutcomeMusic("victory"), true);
+  assert.equal(music.src, OUTCOME_MUSIC_TRACKS.victory.src);
+  assert.equal(music.loop, false);
+  assert.equal(controller.getSnapshot().activeOutcome, "victory");
+  assert.equal(controller.getSnapshot().previewingOutcome, false);
+  const victoryPlayCount = music.playCount;
+  assert.equal(await controller.playOutcomeMusic("victory"), true);
+  assert.equal(music.playCount, victoryPlayCount);
+
+  music.emit("ended");
+  assert.equal(controller.getSnapshot().isPlaying, false);
+  assert.equal(controller.getSnapshot().activeOutcome, "victory");
+
+  assert.equal(await controller.previewOutcomeMusic("defeat"), true);
+  assert.equal(music.src, OUTCOME_MUSIC_TRACKS.defeat.src);
+  assert.equal(controller.getSnapshot().activeOutcome, "defeat");
+  assert.equal(controller.getSnapshot().previewingOutcome, true);
+  music.emit("ended");
+  await flushTasks();
+  assert.equal(controller.getSnapshot().activeOutcome, null);
+  assert.equal(controller.getSnapshot().previewingOutcome, false);
+  assert.equal(controller.getSnapshot().currentTrackId, "black-diamond");
+  assert.equal(music.src, "/audio/music/black-diamond.mp3");
+  assert.equal(controller.getSnapshot().isPlaying, true);
+  controller.destroy();
+});
+
+test("outcome cues obey the music switch, pause control, and master volume", async () => {
+  const { audios, controller } = createHarness();
+  controller.mount();
+  await controller.notifyUserInteraction();
+  const music = audios[0];
+  controller.setMusicVolume(0.35);
+  await controller.toggleMusic(false);
+  const playCountWhileOff = music.playCount;
+
+  assert.equal(await controller.playOutcomeMusic("defeat"), false);
+  assert.equal(controller.getSnapshot().activeOutcome, "defeat");
+  assert.equal(music.playCount, playCountWhileOff);
+  assert.equal(await controller.toggleMusic(true), true);
+  assert.equal(music.src, OUTCOME_MUSIC_TRACKS.defeat.src);
+  assert.equal(music.volume, MUSIC_OUTPUT_GAIN * 0.35);
+
+  assert.equal(controller.pauseMusic(), true);
+  assert.equal(controller.getSnapshot().isPaused, true);
+  assert.equal(await controller.resumeMusic(), true);
+  assert.equal(controller.getSnapshot().activeOutcome, "defeat");
+  assert.equal(controller.getSnapshot().isPlaying, true);
   controller.destroy();
 });
 

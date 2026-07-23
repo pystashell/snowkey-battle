@@ -16,6 +16,7 @@ import { AudioControls } from "./AudioControls";
 import { LanguageSwitcher, useLanguage } from "./LanguageContext";
 import type { UiLanguage } from "./language";
 import { useGameAudio } from "./useGameAudio";
+import { resolvePersonalOutcome } from "./game-audio";
 import { useRoomSocket } from "./useRoomSocket";
 import { WORD_BOOKS, WORD_BOOK_OPTIONS, type WordbookId } from "./wordbooks";
 import {
@@ -826,6 +827,7 @@ export default function SnowballGame() {
   const gameAudio = useGameAudio();
   const playSfx = gameAudio.playSfx;
   const setMusicScene = gameAudio.setMusicScene;
+  const playOutcomeMusic = gameAudio.playOutcomeMusic;
   const room = useRoomSocket({ autoResume: true });
 
   const inputRef = useRef<HTMLInputElement>(null);
@@ -861,10 +863,6 @@ export default function SnowballGame() {
   const onlineSnapshot = isOnline ? room.snapshot : null;
   const onlineServerTimeOffsetMs = room.serverTimeOffsetMs;
   const getOnlineServerNow = room.getServerNow;
-
-  useEffect(() => {
-    void setMusicScene(stage === "lobby" ? "lobby" : "battle");
-  }, [setMusicScene, stage]);
 
   useEffect(() => {
     languageRef.current = language;
@@ -923,6 +921,16 @@ export default function SnowballGame() {
   const pineFrontlineId = getFrontlineId(activePlayers, "pine");
   const berryFrontlineId = getFrontlineId(activePlayers, "berry");
   const user = activePlayers.find((player) => player.isUser);
+  const personalOutcome = resolvePersonalOutcome(winner, user?.team ?? null);
+
+  useEffect(() => {
+    if (stage === "ended") {
+      if (personalOutcome) void playOutcomeMusic(personalOutcome);
+      return;
+    }
+    void setMusicScene(stage === "lobby" ? "lobby" : "battle");
+  }, [personalOutcome, playOutcomeMusic, setMusicScene, stage]);
+
   const userAlive = Boolean(user && user.health > 0);
   const userFrozen = Boolean(user && user.frozenUntil > effectNow);
   const userFrozenSeconds = userFrozen && user

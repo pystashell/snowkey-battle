@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from 
 import {
   GameAudioController,
   type GameAudioControllerOptions,
+  type GameOutcome,
   type GameSfx,
   type MusicScene,
 } from "./game-audio";
@@ -46,6 +47,8 @@ export function useGameAudio(options: GameAudioControllerOptions = {}) {
   const playRandom = useCallback((scene?: MusicScene) => controller.playRandom(scene), [controller]);
   const playNext = useCallback(() => controller.playNext(), [controller]);
   const setMusicScene = useCallback((scene: MusicScene) => controller.setMusicScene(scene), [controller]);
+  const playOutcomeMusic = useCallback((outcome: GameOutcome) => controller.playOutcomeMusic(outcome), [controller]);
+  const previewOutcomeMusic = useCallback((outcome: GameOutcome) => controller.previewOutcomeMusic(outcome), [controller]);
   const pauseMusic = useCallback(() => controller.pauseMusic(), [controller]);
   const resumeMusic = useCallback(() => controller.resumeMusic(), [controller]);
   const togglePlayback = useCallback(() => controller.togglePlayback(), [controller]);
@@ -60,11 +63,14 @@ export function useGameAudio(options: GameAudioControllerOptions = {}) {
   return useMemo(() => ({
     ...state,
     tracks: controller.tracks,
+    outcomeTracks: controller.outcomeTracks,
     tracksForScene,
     selectTrack,
     playRandom,
     playNext,
     setMusicScene,
+    playOutcomeMusic,
+    previewOutcomeMusic,
     pauseMusic,
     resumeMusic,
     togglePlayback,
@@ -77,12 +83,15 @@ export function useGameAudio(options: GameAudioControllerOptions = {}) {
     clearBlocked,
   }), [
     clearBlocked,
+    controller.outcomeTracks,
     controller.tracks,
     notifyUserInteraction,
     pauseMusic,
     playNext,
+    playOutcomeMusic,
     playRandom,
     playSfx,
+    previewOutcomeMusic,
     resumeMusic,
     selectTrack,
     setMusicScene,

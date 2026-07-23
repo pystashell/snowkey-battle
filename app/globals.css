@@ -4708,6 +4708,17 @@ select:focus-visible {
   box-shadow: inset 3px 0 0 var(--mint);
 }
 
+.audio-controls__scene--outcomes {
+  margin-top: 9px;
+  border-color: rgba(184, 119, 43, 0.34);
+  background: rgba(255, 243, 207, 0.58);
+}
+
+.audio-controls__scene--outcomes .audio-controls__scene-title > b {
+  color: var(--night-deep);
+  background: var(--sun);
+}
+
 .audio-controls__scene-header {
   display: flex;
   align-items: center;

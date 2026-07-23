@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useId, useState } from "react";
-import type { MusicScene } from "./game-audio";
+import type { GameOutcome, MusicScene } from "./game-audio";
 import { useLanguage } from "./LanguageContext";
 import type { useGameAudio } from "./useGameAudio";
 
@@ -10,6 +10,7 @@ export type AudioControlsProps = {
 };
 
 const SCENES: readonly MusicScene[] = ["lobby", "battle"];
+const OUTCOMES: readonly GameOutcome[] = ["victory", "defeat"];
 
 export function AudioControls({ audio }: AudioControlsProps) {
   const { text } = useLanguage();
@@ -21,8 +22,16 @@ export function AudioControls({ audio }: AudioControlsProps) {
   const sceneName = (scene: MusicScene) => scene === "lobby"
     ? text("大厅音乐", "Lobby music")
     : text("战斗音乐", "Battle music");
-  const currentTitle = audio.currentTrack?.title ?? sceneName(audio.musicScene);
-  const currentArtist = audio.currentTrack?.artist ?? text("等待第一次播放", "Waiting for first play");
+  const outcomeName = (outcome: GameOutcome) => outcome === "victory"
+    ? text("胜利音乐", "Victory music")
+    : text("失败音乐", "Defeat music");
+  const activeOutcomeTrack = audio.activeOutcome
+    ? audio.outcomeTracks[audio.activeOutcome]
+    : null;
+  const currentTitle = activeOutcomeTrack?.title ?? audio.currentTrack?.title ?? sceneName(audio.musicScene);
+  const currentArtist = activeOutcomeTrack?.artist
+    ?? audio.currentTrack?.artist
+    ?? text("等待第一次播放", "Waiting for first play");
 
   useEffect(() => {
     if (!open) return;
@@ -41,6 +50,12 @@ export function AudioControls({ audio }: AudioControlsProps) {
         ? text("点按继续播放", "Tap to resume")
         : audio.isPaused
           ? text("音乐已暂停", "Music paused")
+          : audio.activeOutcome
+            ? audio.isPlaying
+              ? audio.previewingOutcome
+                ? text(`正在试听${outcomeName(audio.activeOutcome)}`, `Previewing ${outcomeName(audio.activeOutcome)}`)
+                : text(`${outcomeName(audio.activeOutcome)}播放中`, `${outcomeName(audio.activeOutcome)} playing`)
+              : text(`${outcomeName(audio.activeOutcome)}待播放`, `${outcomeName(audio.activeOutcome)} ready`)
           : audio.isPlaying
             ? audio.previewingScene
               ? text(`正在试听${sceneName(audio.previewingScene)}`, `Previewing ${sceneName(audio.previewingScene)}`)
@@ -66,7 +81,11 @@ export function AudioControls({ audio }: AudioControlsProps) {
         onClick={() => setOpen((value) => !value)}
       >
         <span className="audio-controls__note" aria-hidden="true">
-          {audio.musicEnabled ? audio.isPaused ? "Ⅱ" : "♫" : "♪"}
+          {audio.activeOutcome === "victory"
+            ? "★"
+            : audio.activeOutcome === "defeat"
+              ? "❄"
+              : audio.musicEnabled ? audio.isPaused ? "Ⅱ" : "♫" : "♪"}
         </span>
         <span className="audio-controls__trigger-copy">
           <strong>{currentTitle}</strong>
@@ -86,7 +105,11 @@ export function AudioControls({ audio }: AudioControlsProps) {
         >
           <header className="audio-controls__header" data-game-audio-control>
             <div className="audio-controls__heading" data-game-audio-control>
-              <span>{text(`当前场景 · ${sceneName(audio.musicScene)}`, `Current scene · ${sceneName(audio.musicScene)}`)}</span>
+              <span>
+                {audio.activeOutcome
+                  ? text(`当前结算 · ${outcomeName(audio.activeOutcome)}`, `Current result · ${outcomeName(audio.activeOutcome)}`)
+                  : text(`当前场景 · ${sceneName(audio.musicScene)}`, `Current scene · ${sceneName(audio.musicScene)}`)}
+              </span>
               <h2 id={titleId}>{currentTitle}</h2>
               <p>{currentArtist}</p>
             </div>
@@ -134,7 +157,9 @@ export function AudioControls({ audio }: AudioControlsProps) {
               onClick={() => void audio.playNext()}
             >
               <span aria-hidden="true">▷|</span>
-              {text("下一首", "Next")}
+              {audio.activeOutcome
+                ? text("返回场景音乐", "Scene music")
+                : text("下一首", "Next")}
             </button>
           </div>
 
@@ -270,6 +295,67 @@ export function AudioControls({ audio }: AudioControlsProps) {
             })}
           </div>
 
+          <section
+            className="audio-controls__scene audio-controls__scene--outcomes"
+            data-game-audio-control
+            aria-label={text("胜负结算音乐", "Result music")}
+          >
+            <header className="audio-controls__scene-header" data-game-audio-control>
+              <span className="audio-controls__scene-title">
+                <b>★</b>
+                <span>
+                  <strong>{text("胜负结算音乐", "Result music")}</strong>
+                  <small>{text("结算时自动播放，也可在这里试听", "Plays automatically at the result; preview here")}</small>
+                </span>
+              </span>
+            </header>
+
+            <ul className="audio-controls__tracks" data-game-audio-control>
+              {OUTCOMES.map((outcome, index) => {
+                const track = audio.outcomeTracks[outcome];
+                const active = audio.activeOutcome === outcome;
+                const playing = active && audio.isPlaying && audio.musicEnabled;
+                return (
+                  <li key={outcome} data-game-audio-control>
+                    <button
+                      type="button"
+                      className={active ? "is-selected" : ""}
+                      data-game-audio-control
+                      aria-pressed={active}
+                      aria-label={`${text("试听", "Preview")} ${outcomeName(outcome)} ${track.title} — ${track.artist}`}
+                      onClick={() => void audio.previewOutcomeMusic(outcome)}
+                    >
+                      <span className="audio-controls__track-number" aria-hidden="true">
+                        {String(index + 1).padStart(2, "0")}
+                      </span>
+                      <span className="audio-controls__track-copy">
+                        <strong>{track.title}</strong>
+                        <small>{outcomeName(outcome)} · {track.artist}</small>
+                      </span>
+                      <span className="audio-controls__track-state">
+                        {playing
+                          ? audio.previewingOutcome
+                            ? text("试听中", "Previewing")
+                            : text("播放中", "Playing")
+                          : text("试听", "Preview")}
+                      </span>
+                    </button>
+                    <a
+                      className="audio-controls__track-source"
+                      data-game-audio-control
+                      href={track.sourceUrl}
+                      target="_blank"
+                      rel="noreferrer"
+                      aria-label={`${track.title} — ${track.artist}: ${track.license}`}
+                    >
+                      {text("许可见来源", "License terms")} · Aigei.com ↗
+                    </a>
+                  </li>
+                );
+              })}
+            </ul>
+          </section>
+
           <div className="audio-controls__toggles" data-game-audio-control role="group" aria-label={text("声音开关", "Sound toggles")}>
             <button
               type="button"
@@ -295,8 +381,8 @@ export function AudioControls({ audio }: AudioControlsProps) {
 
           <p className="audio-controls__license" data-game-audio-control>
             {text(
-              "4 首音乐均已标注作者、CC0 1.0 许可和 OpenGameArt 出处。",
-              "All four tracks show their author, CC0 1.0 license, and OpenGameArt source.",
+              "4 首背景音乐标注 OpenGameArt 出处；2 首结算音乐为用户提供的爱给网素材，许可见来源。",
+              "Four background tracks show their OpenGameArt source; both user-provided result cues link to Aigei licensing terms.",
             )}
           </p>
         </section>
