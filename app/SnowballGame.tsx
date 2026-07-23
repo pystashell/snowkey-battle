@@ -42,6 +42,7 @@ type Team = "pine" | "berry";
 type Stage = "lobby" | "countdown" | "playing" | "paused" | "ended";
 type SnowfallLevel = "light" | "classic" | "blizzard";
 type GameMode = "local" | "online";
+type MobileKeyboardMode = "system" | "compact";
 
 type Player = {
   id: string;
@@ -186,6 +187,13 @@ const FROST_FREEZE_MS = 1_000;
 const WORD_START_Y = 7;
 const WORD_GROUND_TTL_MS = 2_000;
 const WORD_MELT_ANIMATION_MS = 350;
+const MOBILE_KEYBOARD_MEDIA_QUERY = "(max-width: 560px), (max-width: 1120px) and (max-height: 600px)";
+const MOBILE_KEYBOARD_STORAGE_KEY = "snowkey-battle:mobile-keyboard";
+const COMPACT_KEYBOARD_ROWS = [
+  ["q", "w", "e", "r", "t", "y", "u", "i", "o", "p"],
+  ["a", "s", "d", "f", "g", "h", "j", "k", "l"],
+  ["z", "x", "c", "v", "b", "n", "m"],
+] as const;
 
 const ENGLISH_ROOM_ERRORS: Record<string, string> = {
   INVALID_NAME: "Enter your name before creating or joining a room.",
@@ -824,6 +832,8 @@ export default function SnowballGame() {
   const [winner, setWinner] = useState<Team | null>(null);
   const [inputError, setInputError] = useState(false);
   const [typingInputFocused, setTypingInputFocused] = useState(false);
+  const [mobileKeyboardMode, setMobileKeyboardMode] = useState<MobileKeyboardMode>("system");
+  const [mobileKeyboardAvailable, setMobileKeyboardAvailable] = useState(false);
   const [announcement, setAnnouncement] = useState(language === "zh" ? "等待开战" : "Waiting for battle");
   const gameAudio = useGameAudio();
   const playSfx = gameAudio.playSfx;
@@ -877,6 +887,28 @@ export default function SnowballGame() {
       ? language === "zh" ? "继续抢单词雪花！" : "Keep claiming word snowflakes!"
       : language === "zh" ? "等待开战" : "Waiting for battle");
   }, [language]);
+
+  useEffect(() => {
+    const mediaQuery = window.matchMedia(MOBILE_KEYBOARD_MEDIA_QUERY);
+    const syncAvailability = () => setMobileKeyboardAvailable(mediaQuery.matches);
+    let preferenceTimer: number | null = null;
+
+    syncAvailability();
+    try {
+      const storedMode = window.localStorage.getItem(MOBILE_KEYBOARD_STORAGE_KEY);
+      if (storedMode === "system" || storedMode === "compact") {
+        preferenceTimer = window.setTimeout(() => setMobileKeyboardMode(storedMode), 0);
+      }
+    } catch {
+      // Storage can be unavailable in a private or restricted embedded browser.
+    }
+
+    mediaQuery.addEventListener("change", syncAvailability);
+    return () => {
+      if (preferenceTimer !== null) window.clearTimeout(preferenceTimer);
+      mediaQuery.removeEventListener("change", syncAvailability);
+    };
+  }, []);
 
   useEffect(() => {
     const shell = shellRef.current;
@@ -1033,6 +1065,12 @@ export default function SnowballGame() {
 
   const userAlive = Boolean(user && user.health > 0);
   const userFrozen = Boolean(user && user.frozenUntil > effectNow);
+  const compactKeyboardActive = mobileKeyboardAvailable && mobileKeyboardMode === "compact";
+  const compactKeyboardVisible = compactKeyboardActive && stage === "playing" && userAlive;
+  const typingDisabled = stage !== "playing"
+    || !userAlive
+    || userFrozen
+    || (isOnline && !room.connected);
   const userFrozenSeconds = userFrozen && user
     ? Math.max(0.1, (user.frozenUntil - effectNow) / 1_000).toFixed(1)
     : "0.0";
@@ -2081,8 +2119,14 @@ export default function SnowballGame() {
   }, [countdown, isOnline, maxWords, setGameStage, snowfallProfile.initialWords, spawnWord, stage, textNow]);
 
   useEffect(() => {
-    if (stage === "playing" && userAlive) window.setTimeout(() => inputRef.current?.focus(), 30);
-  }, [stage, userAlive]);
+    if (stage !== "playing" || !userAlive) return;
+    if (compactKeyboardActive) {
+      inputRef.current?.blur();
+      return;
+    }
+    const timer = window.setTimeout(() => inputRef.current?.focus(), 30);
+    return () => window.clearTimeout(timer);
+  }, [compactKeyboardActive, stage, userAlive]);
 
   useEffect(() => {
     const fallTimer = window.setInterval(() => {
@@ -2181,14 +2225,13 @@ export default function SnowballGame() {
     [],
   );
 
-  const handleInput = (event: ChangeEvent<HTMLInputElement>) => {
-    if (isOnline) return;
+  const applyLocalInputValue = (rawValue: string) => {
     if (stageRef.current !== "playing" || !userAlive || userFrozen) return;
     const typedBeforePrune = typedRef.current;
     const availableWords = pruneExpiredWords(Date.now());
     const typingWasPruned = Boolean(typedBeforePrune && !typedRef.current);
     const previousTyped = typedRef.current;
-    const inputValue = event.target.value.toLowerCase().replace(/[^a-z]/g, "").slice(0, MAX_WORD_LENGTH);
+    const inputValue = rawValue.toLowerCase().replace(/[^a-z]/g, "").slice(0, MAX_WORD_LENGTH);
     const nextValue = typingWasPruned ? inputValue.slice(-1) : inputValue;
     if (!nextValue) {
       typedRef.current = "";
@@ -2229,45 +2272,80 @@ export default function SnowballGame() {
     }
   };
 
+  const applyTypingKey = (rawKey: string) => {
+    const key = rawKey.toLowerCase();
+    if (!/^[a-z]$/.test(key)) return;
+
+    if (!isOnline) {
+      applyLocalInputValue(`${typedRef.current}${key}`);
+      return;
+    }
+    if (stageRef.current !== "playing" || !userAlive || userFrozen || !room.connected) return;
+
+    const availableWords = pruneExpiredWords(Date.now());
+    room.sendCommand({ op: "type.key", key });
+    const nextValue = `${typedRef.current}${key}`.slice(0, MAX_WORD_LENGTH);
+    const target = targetWordIdRef.current === null
+      ? null
+      : availableWords.find((word) => word.id === targetWordIdRef.current) ?? null;
+    const matches = target
+      ? target.text.startsWith(nextValue) ? [target] : []
+      : availableWords.filter((word) => word.text.startsWith(nextValue));
+    if (!matches.length) {
+      setInputError(true);
+      setWrongKeys((value) => value + 1);
+      window.setTimeout(() => setInputError(false), 260);
+      return;
+    }
+    if (!target && matches.length === 1) lockTargetWord(matches[0].id);
+    typedRef.current = nextValue;
+    setTyped(nextValue);
+    setCorrectKeys((value) => value + 1);
+    const exact = matches.length === 1 && matches[0].text === nextValue;
+    if (exact) {
+      typedRef.current = "";
+      setTyped("");
+      clearTargetWord();
+    }
+  };
+
+  const clearTypingInput = () => {
+    if (isOnline) room.sendCommand({ op: "type.cancel" });
+    typedRef.current = "";
+    setTyped("");
+    clearTargetWord();
+    setInputError(false);
+  };
+
+  const handleInput = (event: ChangeEvent<HTMLInputElement>) => {
+    if (isOnline) return;
+    applyLocalInputValue(event.target.value);
+  };
+
   const handleInputKeyDown = (event: KeyboardEvent<HTMLInputElement>) => {
     if (isOnline && /^[a-zA-Z]$/.test(event.key)) {
       event.preventDefault();
-      if (stageRef.current !== "playing" || !userAlive || userFrozen || !room.connected) return;
-      const key = event.key.toLowerCase();
-      const availableWords = pruneExpiredWords(Date.now());
-      room.sendCommand({ op: "type.key", key });
-      const nextValue = `${typedRef.current}${key}`.slice(0, MAX_WORD_LENGTH);
-      const target = targetWordIdRef.current === null
-        ? null
-        : availableWords.find((word) => word.id === targetWordIdRef.current) ?? null;
-      const matches = target
-        ? target.text.startsWith(nextValue) ? [target] : []
-        : availableWords.filter((word) => word.text.startsWith(nextValue));
-      if (!matches.length) {
-        setInputError(true);
-        setWrongKeys((value) => value + 1);
-        window.setTimeout(() => setInputError(false), 260);
-        return;
-      }
-      if (!target && matches.length === 1) lockTargetWord(matches[0].id);
-      typedRef.current = nextValue;
-      setTyped(nextValue);
-      setCorrectKeys((value) => value + 1);
-      const exact = matches.length === 1 && matches[0].text === nextValue;
-      if (exact) {
-        typedRef.current = "";
-        setTyped("");
-        clearTargetWord();
-      }
+      applyTypingKey(event.key);
       return;
     }
     if (event.key === "Escape" || event.key === " " || (isOnline && event.key === "Backspace")) {
       event.preventDefault();
-      if (isOnline) room.sendCommand({ op: "type.cancel" });
-      typedRef.current = "";
-      setTyped("");
-      clearTargetWord();
-      setInputError(false);
+      clearTypingInput();
+    }
+  };
+
+  const toggleMobileKeyboard = () => {
+    const nextMode: MobileKeyboardMode = mobileKeyboardMode === "compact" ? "system" : "compact";
+    if (nextMode === "compact") {
+      inputRef.current?.blur();
+      setTypingInputFocused(false);
+      window.requestAnimationFrame(() => window.scrollTo(0, 0));
+    }
+    setMobileKeyboardMode(nextMode);
+    try {
+      window.localStorage.setItem(MOBILE_KEYBOARD_STORAGE_KEY, nextMode);
+    } catch {
+      // Keep the in-memory selection when embedded-browser storage is blocked.
     }
   };
 
@@ -2358,7 +2436,7 @@ export default function SnowballGame() {
   return (
     <main
       ref={shellRef}
-      className={`game-shell game-shell--${stage}${stage === "lobby" ? "" : " game-shell--battle"}${typingInputFocused ? " game-shell--typing" : ""}`}
+      className={`game-shell game-shell--${stage}${stage === "lobby" ? "" : " game-shell--battle"}${typingInputFocused ? " game-shell--typing" : ""}${compactKeyboardVisible ? " game-shell--compact-keyboard" : ""}`}
     >
       <LanguageSwitcher />
       <AudioControls audio={gameAudio} />
@@ -2603,7 +2681,13 @@ export default function SnowballGame() {
             </section>
           </div>
 
-          <div ref={arenaRef} className="arena" onClick={() => inputRef.current?.focus()}>
+          <div
+            ref={arenaRef}
+            className="arena"
+            onClick={() => {
+              if (!compactKeyboardActive) inputRef.current?.focus();
+            }}
+          >
             <div className="sky-hills" aria-hidden="true">
               <span className="hill hill--one" />
               <span className="hill hill--two" />
@@ -2814,13 +2898,13 @@ export default function SnowballGame() {
             )}
           </div>
 
-          <div className="type-dock">
+          <div className={`type-dock${compactKeyboardVisible ? " type-dock--compact-keyboard" : ""}`}>
             <div className="stat-card">
               <small>{text("连续命中", "COMBO")}</small>
               <strong>×{combo}</strong>
               <span>{text(`最高 ${bestCombo}`, `Best ${bestCombo}`)}</span>
             </div>
-            <label className={`type-box${inputError ? " is-error" : ""}${typed ? " has-text" : ""}${userFrozen ? " is-frozen" : ""}`}>
+            <div className={`type-box${inputError ? " is-error" : ""}${typed ? " has-text" : ""}${userFrozen ? " is-frozen" : ""}`}>
               <span className="type-box__hint">
                 {userAlive
                   ? userFrozen
@@ -2837,35 +2921,69 @@ export default function SnowballGame() {
               </span>
               <div className="type-box__line">
                 <span className="type-box__prompt">EN</span>
-                <input
-                  ref={inputRef}
-                  value={typed}
-                  maxLength={MAX_WORD_LENGTH}
-                  onChange={handleInput}
-                  onKeyDown={handleInputKeyDown}
-                  disabled={stage !== "playing" || !userAlive || userFrozen || (isOnline && !room.connected)}
-                  placeholder={userAlive
-                    ? userFrozen
-                      ? text("冻结中…", "frozen…")
-                      : isOnline && !room.connected
-                        ? text("重连中…", "reconnecting…")
-                        : text("输入英文单词…", "type an English word…")
-                    : text("你已出局", "you are out")}
-                  lang="en"
-                  inputMode="text"
-                  autoCapitalize="none"
-                  autoComplete="off"
-                  autoCorrect="off"
-                  spellCheck={false}
-                  aria-label={text("英文单词输入框", "English word input")}
-                  onPaste={(event) => event.preventDefault()}
-                />
+                {compactKeyboardActive ? (
+                  <div
+                    className={`type-box__compact-display${typed ? "" : " is-placeholder"}`}
+                    role="textbox"
+                    aria-label={text("精简键盘英文输入", "Compact keyboard English input")}
+                    aria-readonly="true"
+                  >
+                    {typed || (userAlive
+                      ? userFrozen
+                        ? text("冻结中…", "frozen…")
+                        : isOnline && !room.connected
+                          ? text("重连中…", "reconnecting…")
+                          : text("点击下方字母键…", "tap the letter keys below…")
+                      : text("你已出局", "you are out"))}
+                  </div>
+                ) : (
+                  <input
+                    ref={inputRef}
+                    value={typed}
+                    maxLength={MAX_WORD_LENGTH}
+                    onChange={handleInput}
+                    onKeyDown={handleInputKeyDown}
+                    disabled={typingDisabled}
+                    placeholder={userAlive
+                      ? userFrozen
+                        ? text("冻结中…", "frozen…")
+                        : isOnline && !room.connected
+                          ? text("重连中…", "reconnecting…")
+                          : text("输入英文单词…", "type an English word…")
+                      : text("你已出局", "you are out")}
+                    lang="en"
+                    inputMode="text"
+                    autoCapitalize="none"
+                    autoComplete="off"
+                    autoCorrect="off"
+                    spellCheck={false}
+                    aria-label={text("英文单词输入框", "English word input")}
+                    onPaste={(event) => event.preventDefault()}
+                  />
+                )}
                 <span className="type-box__clear">{text("SPACE 清空", "SPACE clears")}</span>
+                <button
+                  type="button"
+                  className="keyboard-mode-toggle"
+                  aria-label={mobileKeyboardMode === "compact"
+                    ? text("切换到系统键盘", "Switch to system keyboard")
+                    : text("切换到精简键盘", "Switch to compact keyboard")}
+                  title={mobileKeyboardMode === "compact"
+                    ? text("使用系统键盘", "Use system keyboard")
+                    : text("使用精简键盘", "Use compact keyboard")}
+                  onPointerDown={(event) => event.preventDefault()}
+                  onClick={toggleMobileKeyboard}
+                >
+                  <span aria-hidden="true">⌨</span>
+                  {mobileKeyboardMode === "compact"
+                    ? text("系统", "System")
+                    : text("精简", "Compact")}
+                </button>
               </div>
               <span className="type-box__message" aria-live="polite">
                 {inputError ? text("没有这个英文开头，再看一眼", "No word starts with that prefix. Look again") : announcement}
               </span>
-            </label>
+            </div>
             <div className="stat-card stat-card--right">
               <small>{text("输入准确率", "ACCURACY")}</small>
               <strong>{accuracy}%</strong>
@@ -2874,6 +2992,46 @@ export default function SnowballGame() {
                 `${players.find((player) => player.isUser)?.claims ?? 0} snowballs`,
               )}</span>
             </div>
+            {compactKeyboardVisible && (
+              <section
+                className="compact-keyboard"
+                aria-label={text("精简英文键盘", "Compact English keyboard")}
+              >
+                {COMPACT_KEYBOARD_ROWS.map((row, rowIndex) => (
+                  <div
+                    key={row.join("")}
+                    className={`compact-keyboard__row compact-keyboard__row--${rowIndex + 1}`}
+                  >
+                    {row.map((letter) => (
+                      <button
+                        key={letter}
+                        type="button"
+                        className="compact-keyboard__key"
+                        disabled={typingDisabled}
+                        aria-label={letter.toUpperCase()}
+                        onPointerDown={(event) => event.preventDefault()}
+                        onClick={() => applyTypingKey(letter)}
+                      >
+                        {letter.toUpperCase()}
+                      </button>
+                    ))}
+                    {rowIndex === COMPACT_KEYBOARD_ROWS.length - 1 && (
+                      <button
+                        type="button"
+                        className="compact-keyboard__key compact-keyboard__key--clear"
+                        disabled={typingDisabled || !typed}
+                        aria-label={text("清空当前输入", "Clear current input")}
+                        onPointerDown={(event) => event.preventDefault()}
+                        onClick={clearTypingInput}
+                      >
+                        <span aria-hidden="true">⌫</span>
+                        <small>{text("清空", "Clear")}</small>
+                      </button>
+                    )}
+                  </div>
+                ))}
+              </section>
+            )}
           </div>
         </section>
       )}
