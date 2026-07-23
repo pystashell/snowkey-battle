@@ -384,6 +384,44 @@ test("join with the same credentials reconnects to the same seat during the grac
   assert.equal(wrongToken.code, "INVALID_RECONNECT_TOKEN");
 });
 
+test("the creating host reconnects ready and can start immediately when every other seat is AI", () => {
+  const engine = createEngine();
+  assert.equal(engine.disconnect(HOST_SESSION, 1).ok, true);
+
+  let host = engine.snapshot(1, HOST_SESSION).players.find((player) => player.id === "pine-0");
+  assert.equal(host?.controller.kind, "human");
+  assert.equal(host?.controller.connected, false);
+  assert.equal(host?.controller.ready, false);
+
+  const resumed = engine.join({
+    sessionId: HOST_SESSION,
+    reconnectToken: HOST_TOKEN,
+    name: "房主",
+    now: 2,
+  });
+  assert.equal(resumed.ok, true);
+  assert.equal(resumed.resumed, true);
+
+  host = resumed.snapshot.players.find((player) => player.id === "pine-0");
+  assert.equal(host?.controller.kind, "human");
+  assert.equal(host?.controller.connected, true);
+  assert.equal(host?.controller.ready, true);
+
+  const requested = engine.handleCommand(HOST_SESSION, { op: "match.start" }, 3);
+  assert.equal(requested.ok, true);
+  assert.equal(engine.snapshot(3, HOST_SESSION).phase, "countdown");
+});
+
+test("a connected human guest must still ready up before the host can start", () => {
+  const engine = createEngine();
+  assert.equal(join(engine, 1, 1).ok, true);
+
+  const requested = engine.handleCommand(HOST_SESSION, { op: "match.start" }, 2);
+  assert.equal(requested.ok, false);
+  assert.equal(requested.code, "NOT_READY");
+  assert.equal(engine.snapshot(2, HOST_SESSION).phase, "lobby");
+});
+
 test("a disconnected human is replaced by AI exactly at 60 seconds", () => {
   const engine = createEngine();
   const joined = join(engine, 1, 10);

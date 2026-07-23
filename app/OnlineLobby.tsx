@@ -180,9 +180,11 @@ export function OnlineLobby(props: OnlineLobbyProps) {
   const hasPlayerName = playerName.trim().length > 0;
   const canCreate = hasPlayerName && !busy;
   const canJoin = canCreate && roomCode.length === 6;
-  const allHumansReady = snapshot?.players
-    .filter((player) => player.controller.kind === "human")
-    .every((player) => player.controller.kind === "human" && player.controller.connected && player.controller.ready) ?? false;
+  const humanGuests = snapshot?.players
+    .filter((player) => player.controller.kind === "human" && !player.controller.isHost) ?? [];
+  const allHumanGuestsReady = humanGuests
+    .every((player) => player.controller.kind === "human" && player.controller.connected && player.controller.ready);
+  const hasHumanGuests = humanGuests.length > 0;
   const grouped = useMemo(() => ({
     pine: snapshot?.players.filter((player) => player.team === "pine").sort((a, b) => a.position - b.position) ?? [],
     berry: snapshot?.players.filter((player) => player.team === "berry").sort((a, b) => a.position - b.position) ?? [],
@@ -355,12 +357,14 @@ export function OnlineLobby(props: OnlineLobbyProps) {
             {isHost && (
               <button
                 className="primary-button online-start"
-                disabled={!allHumansReady || !connected}
+                disabled={!allHumanGuestsReady || !connected}
                 onClick={() => sendCommand({ op: "match.start" })}
               >
-                <span>{snapshot.config.pineSize} VS {snapshot.config.berrySize} · {allHumansReady
-                  ? text("全员已准备", "Everyone Ready")
-                  : text("等待准备", "Waiting for Ready")}</span>
+                <span>{snapshot.config.pineSize} VS {snapshot.config.berrySize} · {!hasHumanGuests
+                  ? text("可立即开始", "Ready to Start")
+                  : allHumanGuestsReady
+                    ? text("全员已准备", "Everyone Ready")
+                    : text("等待准备", "Waiting for Ready")}</span>
                 <strong>{text("房主开始对战 →", "Host Starts Match →")}</strong>
               </button>
             )}

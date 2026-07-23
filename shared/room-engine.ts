@@ -487,6 +487,7 @@ export class RoomEngine {
         return this.failure("NAME_TAKEN", "这个名字已经被其他玩家使用，请换一个。", events);
       }
       existing.controller.connected = true;
+      if (existing.controller.isHost) existing.controller.ready = true;
       existing.disconnectDeadline = null;
       existing.name = nextName;
       existing.badge = Array.from(existing.name)[0] ?? existing.badge;

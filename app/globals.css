@@ -4310,6 +4310,28 @@ select:focus-visible {
     --kid-scale: calc(var(--formation-scale) * 0.72);
   }
 
+  /*
+   * Use the whole arena as the formation coordinate system on narrow screens.
+   * Each kid owns a fixed 96px box, so percentage-only placement would push
+   * Pine into the river and clip Berry's rear slot as the arena contracts.
+   */
+  .kids.kids--pine,
+  .kids.kids--berry {
+    right: auto;
+    left: 0;
+    width: 100%;
+  }
+
+  .kids.kids--pine > .kid:nth-child(1) { left: max(0px, calc(40% - 96px)); }
+  .kids.kids--pine > .kid:nth-child(2) { left: max(0px, calc(26.6667% - 64px)); }
+  .kids.kids--pine > .kid:nth-child(3) { left: max(0px, calc(13.3333% - 32px)); }
+  .kids.kids--pine > .kid:nth-child(4) { left: 0; }
+
+  .kids.kids--berry > .kid:nth-child(1) { left: 60%; }
+  .kids.kids--berry > .kid:nth-child(2) { left: calc(73.3333% - 32px); }
+  .kids.kids--berry > .kid:nth-child(3) { left: calc(86.6667% - 64px); }
+  .kids.kids--berry > .kid:nth-child(4) { left: calc(100% - 96px); }
+
   .kid__action,
   .kid--berry .kid__action { top: -34px; }
 }
@@ -4361,6 +4383,15 @@ select:focus-visible {
   .kids.kids--berry > .kid {
     --kid-scale: calc(var(--formation-scale) * 0.56);
   }
+
+  /* The mobile river is 24% wide, leaving 38% of arena width per bank. */
+  .kids.kids--pine > .kid:nth-child(1) { left: max(0px, calc(38% - 96px)); }
+  .kids.kids--pine > .kid:nth-child(2) { left: max(0px, calc(25.3333% - 64px)); }
+  .kids.kids--pine > .kid:nth-child(3) { left: max(0px, calc(12.6667% - 32px)); }
+
+  .kids.kids--berry > .kid:nth-child(1) { left: 62%; }
+  .kids.kids--berry > .kid:nth-child(2) { left: calc(74.6667% - 32px); }
+  .kids.kids--berry > .kid:nth-child(3) { left: calc(87.3333% - 64px); }
 
   .kid__hp {
     top: -5px;

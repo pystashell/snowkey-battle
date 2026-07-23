@@ -12,6 +12,7 @@ import {
   MUSIC_OUTPUT_GAIN,
   MUSIC_PREVIEW_DURATION_MS,
   MUSIC_TRACKS,
+  OUTCOME_MUSIC_GAIN,
   OUTCOME_MUSIC_TRACKS,
   SFX_OUTPUT_GAINS,
   SFX_SOURCES,
@@ -318,6 +319,7 @@ test("scene choices persist separately and another-scene selection previews for 
 });
 
 test("match results interrupt battle music once while manual outcome previews return to the scene", async () => {
+  assert.equal(OUTCOME_MUSIC_GAIN, 1.5);
   const { audios, controller } = createHarness();
   controller.mount();
   await controller.notifyUserInteraction();
@@ -327,6 +329,7 @@ test("match results interrupt battle music once while manual outcome previews re
   assert.equal(await controller.playOutcomeMusic("victory"), true);
   assert.equal(music.src, OUTCOME_MUSIC_TRACKS.victory.src);
   assert.equal(music.loop, false);
+  assert.equal(music.volume, MUSIC_OUTPUT_GAIN * OUTCOME_MUSIC_GAIN * DEFAULT_MUSIC_VOLUME);
   assert.equal(controller.getSnapshot().activeOutcome, "victory");
   assert.equal(controller.getSnapshot().previewingOutcome, false);
   const victoryPlayCount = music.playCount;
@@ -339,6 +342,7 @@ test("match results interrupt battle music once while manual outcome previews re
 
   assert.equal(await controller.previewOutcomeMusic("defeat"), true);
   assert.equal(music.src, OUTCOME_MUSIC_TRACKS.defeat.src);
+  assert.equal(music.volume, MUSIC_OUTPUT_GAIN * OUTCOME_MUSIC_GAIN * DEFAULT_MUSIC_VOLUME);
   assert.equal(controller.getSnapshot().activeOutcome, "defeat");
   assert.equal(controller.getSnapshot().previewingOutcome, true);
   music.emit("ended");
@@ -347,6 +351,7 @@ test("match results interrupt battle music once while manual outcome previews re
   assert.equal(controller.getSnapshot().previewingOutcome, false);
   assert.equal(controller.getSnapshot().currentTrackId, "black-diamond");
   assert.equal(music.src, "/audio/music/black-diamond.mp3");
+  assert.equal(music.volume, MUSIC_OUTPUT_GAIN * DEFAULT_MUSIC_VOLUME);
   assert.equal(controller.getSnapshot().isPlaying, true);
   controller.destroy();
 });
@@ -365,7 +370,7 @@ test("outcome cues obey the music switch, pause control, and master volume", asy
   assert.equal(music.playCount, playCountWhileOff);
   assert.equal(await controller.toggleMusic(true), true);
   assert.equal(music.src, OUTCOME_MUSIC_TRACKS.defeat.src);
-  assert.equal(music.volume, MUSIC_OUTPUT_GAIN * 0.35);
+  assert.equal(music.volume, MUSIC_OUTPUT_GAIN * OUTCOME_MUSIC_GAIN * 0.35);
 
   assert.equal(controller.pauseMusic(), true);
   assert.equal(controller.getSnapshot().isPaused, true);

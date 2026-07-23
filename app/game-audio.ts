@@ -100,6 +100,7 @@ export function resolvePersonalOutcome(
 export const DEFAULT_MUSIC_VOLUME = 0.5;
 export const DEFAULT_SFX_VOLUME = 0.5;
 export const MUSIC_OUTPUT_GAIN = 0.32;
+export const OUTCOME_MUSIC_GAIN = 1.5;
 export const MUSIC_PREVIEW_DURATION_MS = 8_000;
 
 export type GameSfx = "pack" | "hit" | "down";
@@ -809,7 +810,6 @@ export class GameAudioController {
     safelyPause(audio);
     audio.loop = false;
     audio.src = track.src;
-    this.applyMusicVolume();
     this.update({
       currentTrackId: track.id,
       currentTrack: null,
@@ -819,6 +819,7 @@ export class GameAudioController {
       isPlaying: false,
       blocked: false,
     });
+    this.applyMusicVolume();
     try {
       await Promise.resolve(audio.play());
       if (request !== this.playRequest || this.destroyed) return false;
@@ -858,7 +859,9 @@ export class GameAudioController {
   }
 
   private applyMusicVolume() {
-    if (this.music) this.music.volume = MUSIC_OUTPUT_GAIN * this.state.musicVolume;
+    if (!this.music) return;
+    const trackGain = this.state.activeOutcome === null ? 1 : OUTCOME_MUSIC_GAIN;
+    this.music.volume = clampVolume(MUSIC_OUTPUT_GAIN * trackGain * this.state.musicVolume);
   }
 
   private stopAllSfx() {
