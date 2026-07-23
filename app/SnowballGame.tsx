@@ -861,6 +861,8 @@ export default function SnowballGame() {
   const gameStartedAtRef = useRef(0);
   const sequenceRef = useRef(0);
   const lockedWordsRef = useRef(new Set<number>());
+  const pendingOnlineTypingSequencesRef = useRef(new Set<number>());
+  const optimisticallyClaimedWordIdsRef = useRef(new Set<number>());
   const timersRef = useRef<ManagedTimer[]>([]);
   const actorAvailableAtRef = useRef<Record<string, number>>({});
   const pausedAtRef = useRef(0);
@@ -1145,17 +1147,42 @@ export default function SnowballGame() {
   }, [reconcileTypingWithWords]);
 
   useEffect(() => {
+    if (isOnline && room.connected) return;
+    pendingOnlineTypingSequencesRef.current.clear();
+    optimisticallyClaimedWordIdsRef.current.clear();
+  }, [isOnline, room.connected]);
+
+  useEffect(() => {
+    if (!isOnline || !room.lastAck) return;
+    for (const sequence of pendingOnlineTypingSequencesRef.current) {
+      if (sequence <= room.lastAck.sequence) {
+        pendingOnlineTypingSequencesRef.current.delete(sequence);
+      }
+    }
+  }, [isOnline, room.lastAck]);
+
+  useEffect(() => {
     if (!isOnline || !onlineSnapshot) return;
     const now = Date.now();
     const mappedPlayers = onlineSnapshot.players.map((player) =>
       mapRoomPlayer(player, onlineSnapshot.selfPlayerId, onlineServerTimeOffsetMs));
+    const authoritativeWordIds = new Set(onlineSnapshot.words.map((word) => word.id));
+    for (const wordId of optimisticallyClaimedWordIdsRef.current) {
+      if (!authoritativeWordIds.has(wordId)) {
+        optimisticallyClaimedWordIdsRef.current.delete(wordId);
+      }
+    }
     const mappedWords = onlineSnapshot.words
       .map((word) => mapRoomWord(word, onlineSnapshot, onlineServerTimeOffsetMs))
-      .filter((word) => word.expiresAt > now);
+      .filter((word) =>
+        word.expiresAt > now
+        && !optimisticallyClaimedWordIdsRef.current.has(word.id));
     if (onlineSnapshot.phase === "lobby" || onlineSnapshot.phase === "countdown") {
       eliminatedPlayerIdsRef.current.clear();
       fallingPlayerIdsRef.current.clear();
       fallenPlayerIdsRef.current.clear();
+      pendingOnlineTypingSequencesRef.current.clear();
+      optimisticallyClaimedWordIdsRef.current.clear();
     }
     for (const player of mappedPlayers) {
       const previous = playersRef.current.find((candidate) => candidate.id === player.id);
@@ -1207,10 +1234,13 @@ export default function SnowballGame() {
     const typingBufferStillMatches = !selfTyping?.buffer
       || mappedWords.some((word) => word.text.startsWith(selfTyping.buffer));
     const typingIsVisible = Boolean(selfTyping && typingTargetIsVisible && typingBufferStillMatches);
-    const nextTyped = typingIsVisible ? selfTyping?.buffer ?? "" : "";
-    typedRef.current = nextTyped;
-    setTyped(nextTyped);
-    lockTargetWord(typingIsVisible ? selfTyping?.targetWordId ?? null : null);
+    const hasPendingTypingCommands = pendingOnlineTypingSequencesRef.current.size > 0;
+    if (!hasPendingTypingCommands || onlineSnapshot.phase !== "playing") {
+      const nextTyped = typingIsVisible ? selfTyping?.buffer ?? "" : "";
+      typedRef.current = nextTyped;
+      setTyped(nextTyped);
+      lockTargetWord(typingIsVisible ? selfTyping?.targetWordId ?? null : null);
+    }
 
     const nextStage: Stage = onlineSnapshot.phase === "lobby"
       ? "lobby"
@@ -2250,8 +2280,6 @@ export default function SnowballGame() {
     if (!matches.length) {
       setInputError(true);
       setWrongKeys((value) => value + 1);
-      comboRef.current = 0;
-      setCombo(0);
       scheduleTimer(() => setInputError(false), 260);
       return;
     }
@@ -2282,8 +2310,12 @@ export default function SnowballGame() {
     }
     if (stageRef.current !== "playing" || !userAlive || userFrozen || !room.connected) return;
 
-    const availableWords = pruneExpiredWords(Date.now());
-    room.sendCommand({ op: "type.key", key });
+    const availableWords = pruneExpiredWords(Date.now()).filter(
+      (word) => !optimisticallyClaimedWordIdsRef.current.has(word.id),
+    );
+    const sentCommand = room.sendCommand({ op: "type.key", key });
+    if (!sentCommand) return;
+    pendingOnlineTypingSequencesRef.current.add(sentCommand.sequence);
     const nextValue = `${typedRef.current}${key}`.slice(0, MAX_WORD_LENGTH);
     const target = targetWordIdRef.current === null
       ? null
@@ -2301,8 +2333,14 @@ export default function SnowballGame() {
     typedRef.current = nextValue;
     setTyped(nextValue);
     setCorrectKeys((value) => value + 1);
-    const exact = matches.length === 1 && matches[0].text === nextValue;
+    const exact = matches.length === 1 && matches[0].text === nextValue
+      ? matches[0]
+      : null;
     if (exact) {
+      optimisticallyClaimedWordIdsRef.current.add(exact.id);
+      const nextWords = wordsRef.current.filter((word) => word.id !== exact.id);
+      wordsRef.current = nextWords;
+      setWords(nextWords);
       typedRef.current = "";
       setTyped("");
       clearTargetWord();
@@ -2310,7 +2348,10 @@ export default function SnowballGame() {
   };
 
   const clearTypingInput = () => {
-    if (isOnline) room.sendCommand({ op: "type.cancel" });
+    if (isOnline) {
+      const sentCommand = room.sendCommand({ op: "type.cancel" });
+      if (sentCommand) pendingOnlineTypingSequencesRef.current.add(sentCommand.sequence);
+    }
     typedRef.current = "";
     setTyped("");
     clearTargetWord();
@@ -3009,8 +3050,13 @@ export default function SnowballGame() {
                         className="compact-keyboard__key"
                         disabled={typingDisabled}
                         aria-label={letter.toUpperCase()}
-                        onPointerDown={(event) => event.preventDefault()}
-                        onClick={() => applyTypingKey(letter)}
+                        onPointerDown={(event) => {
+                          event.preventDefault();
+                          applyTypingKey(letter);
+                        }}
+                        onClick={(event) => {
+                          if (event.detail === 0) applyTypingKey(letter);
+                        }}
                       >
                         {letter.toUpperCase()}
                       </button>
@@ -3021,8 +3067,13 @@ export default function SnowballGame() {
                         className="compact-keyboard__key compact-keyboard__key--clear"
                         disabled={typingDisabled || !typed}
                         aria-label={text("清空当前输入", "Clear current input")}
-                        onPointerDown={(event) => event.preventDefault()}
-                        onClick={clearTypingInput}
+                        onPointerDown={(event) => {
+                          event.preventDefault();
+                          clearTypingInput();
+                        }}
+                        onClick={(event) => {
+                          if (event.detail === 0) clearTypingInput();
+                        }}
                       >
                         <span aria-hidden="true">⌫</span>
                         <small>{text("清空", "Clear")}</small>

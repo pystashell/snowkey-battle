@@ -1070,7 +1070,6 @@ export class RoomEngine {
     let target = typing.targetWordId === null ? null : this.state.words.find((word) => word.id === typing.targetWordId) ?? null;
     if (typing.targetWordId !== null && !target) {
       this.clearTyping(player.id);
-      player.combo = 0;
       this.emit(events, { type: "typing.rejected", playerId: player.id, reason: "TARGET_GONE" });
       return this.success(events);
     }
@@ -1079,7 +1078,6 @@ export class RoomEngine {
       ? target.text.startsWith(candidateBuffer) ? [target] : []
       : this.state.words.filter((word) => word.text.startsWith(candidateBuffer));
     if (!matches.length) {
-      player.combo = 0;
       this.emit(events, { type: "typing.rejected", playerId: player.id, reason: "NO_MATCH" });
       return this.success(events);
     }

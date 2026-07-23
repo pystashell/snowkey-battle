@@ -564,8 +564,9 @@ test("switching teams keeps the human name and gives the vacated AI a unique nam
   assert.equal(snapshot.players.find((player) => player.id === "pine-0")?.name, "小雪球AI");
 });
 
-test("prefix matching stays ambiguous, locks at one candidate, and rejects a bad key without changing the buffer", () => {
-  const engine = createEngine({ words: ["snow", "star", "river"] });
+test("prefix matching rejects a bad key without changing the buffer or combo", () => {
+  const words = ["snow", "star", "river"];
+  let engine = createEngine({ words });
   const startedAt = start(engine);
 
   engine.handleCommand(HOST_SESSION, { op: "type.key", key: "s" }, startedAt + 1);
@@ -577,11 +578,22 @@ test("prefix matching stays ambiguous, locks at one candidate, and rejects a bad
   assert.equal(typing.buffer, "sn");
   assert.equal(engine.snapshot(startedAt + 2).words.find((word) => word.id === typing.targetWordId)?.text, "snow");
 
+  const serialized = engine.serialize();
+  const host = serialized.state.players.find((player) => player.id === "pine-0");
+  assert.ok(host);
+  host.combo = 4;
+  host.bestCombo = 4;
+  engine = RoomEngine.restore(serialized, {
+    random: () => 0.5,
+    wordbooks: { winter: words },
+  });
+
   const bad = engine.handleCommand(HOST_SESSION, { op: "type.key", key: "x" }, startedAt + 3);
   assert.equal(bad.events.length, 1);
   assert.equal(bad.events[0].type, "typing.rejected");
   typing = engine.snapshot(startedAt + 3, HOST_SESSION).typingByPlayer["pine-0"];
   assert.equal(typing.buffer, "sn");
+  assert.equal(engine.snapshot(startedAt + 3).players.find((player) => player.id === "pine-0")?.combo, 4);
 
   engine.handleCommand(HOST_SESSION, { op: "type.cancel" }, startedAt + 4);
   assert.deepEqual(engine.snapshot(startedAt + 4).typingByPlayer["pine-0"], { buffer: "", targetWordId: null });

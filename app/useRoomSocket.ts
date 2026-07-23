@@ -37,6 +37,15 @@ export type RoomSocketError = {
   message: string;
 };
 
+export type SentRoomCommand = {
+  id: string;
+  sequence: number;
+};
+
+export type RoomCommandAck = SentRoomCommand & {
+  revision: number;
+};
+
 export type RoomEventMeta = {
   revision: number;
   serverTime: number;
@@ -166,6 +175,7 @@ export function useRoomSocket(options: UseRoomSocketOptions = {}) {
   const [roomCode, setRoomCode] = useState<string | null>(null);
   const [snapshot, setSnapshot] = useState<RoomSnapshot | null>(null);
   const [lastEvent, setLastEvent] = useState<RoomEvent | null>(null);
+  const [lastAck, setLastAck] = useState<RoomCommandAck | null>(null);
   const [error, setError] = useState<RoomSocketError | null>(null);
   const [serverTimeOffsetMs, setServerTimeOffsetMs] = useState(0);
 
@@ -237,7 +247,7 @@ export function useRoomSocket(options: UseRoomSocketOptions = {}) {
       command,
     };
     socket.send(JSON.stringify(message));
-    return message.id;
+    return { id: message.id, sequence: message.sequence } satisfies SentRoomCommand;
   }, []);
 
   const schedulePing = useCallback(() => {
@@ -258,6 +268,7 @@ export function useRoomSocket(options: UseRoomSocketOptions = {}) {
       updateServerTime(message.snapshot.serverTime);
       setSnapshot(message.snapshot);
       setLastEvent(null);
+      setLastAck(null);
       setStatus("connected");
       setError(null);
       welcomedRef.current = true;
@@ -294,6 +305,15 @@ export function useRoomSocket(options: UseRoomSocketOptions = {}) {
       return;
     }
 
+    if (message.type === "ack") {
+      setLastAck({
+        id: message.id,
+        sequence: message.sequence,
+        revision: message.revision,
+      });
+      return;
+    }
+
     if (message.type === "error") {
       if (message.code === "KICKED_FROM_ROOM") {
         const credentials = credentialsRef.current;
@@ -312,6 +332,7 @@ export function useRoomSocket(options: UseRoomSocketOptions = {}) {
         setRoomCode(null);
         setSnapshot(null);
         setLastEvent(null);
+        setLastAck(null);
         reportError({ code: message.code, message: message.message }, true);
         return;
       }
@@ -429,6 +450,7 @@ export function useRoomSocket(options: UseRoomSocketOptions = {}) {
     lastEventRevisionRef.current = 0;
     setSnapshot(null);
     setLastEvent(null);
+    setLastAck(null);
     openSocket(credentials, false);
     return true;
   }, [openSocket, reportError]);
@@ -488,6 +510,7 @@ export function useRoomSocket(options: UseRoomSocketOptions = {}) {
       lastEventRevisionRef.current = 0;
       setSnapshot(null);
       setLastEvent(null);
+      setLastAck(null);
       openSocket(credentials, false);
       return normalizedCode;
     } catch {
@@ -527,6 +550,7 @@ export function useRoomSocket(options: UseRoomSocketOptions = {}) {
     setRoomCode(null);
     setSnapshot(null);
     setLastEvent(null);
+    setLastAck(null);
     setError(null);
     setStatus("idle");
   }, [clearPingTimer, clearReconnectTimer, sendRawCommand]);
@@ -573,6 +597,7 @@ export function useRoomSocket(options: UseRoomSocketOptions = {}) {
     roomCode,
     snapshot,
     lastEvent,
+    lastAck,
     error,
     serverTimeOffsetMs,
     createRoom,
