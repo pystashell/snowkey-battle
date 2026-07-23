@@ -2783,6 +2783,11 @@ select:focus-visible {
   }
   .online-seat__status { flex-wrap: wrap; }
   .online-seat__status select { flex-basis: 100%; }
+  .online-seat {
+    height: 112px;
+    min-height: 112px;
+    grid-template-rows: 30px minmax(0, 1fr);
+  }
   .scoreboard--individual {
     min-height: 116px;
   }
@@ -3567,8 +3572,19 @@ select:focus-visible {
   background: #b94d63;
 }
 
-.kid { --kid-fall-direction: -1; }
-.kid--berry { --kid-fall-direction: 1; }
+.kid {
+  --kid-fall-direction: -1;
+  --kid-fall-rotation-direction: 1;
+}
+.kid--berry {
+  --kid-fall-direction: 1;
+  --kid-fall-rotation-direction: -1;
+}
+.kids--pine > .kid:nth-child(1) { --kid-fall-rotation-direction: -1; }
+.kids--berry > .kid:nth-child(1) {
+  --kid-fall-direction: -1;
+  --kid-fall-rotation-direction: -1;
+}
 .kid.is-defeat .kid__figure {
   transform-origin: 50% 100%;
   animation: kid-defeat 700ms cubic-bezier(0.2, 0.72, 0.25, 1) both;
@@ -3592,11 +3608,11 @@ select:focus-visible {
   0% { transform: translate(0, 0) rotate(0); filter: saturate(1); }
   34% {
     transform: translate(calc(var(--kid-fall-direction) * 7px), -4px)
-      rotate(calc(var(--kid-fall-direction) * -24deg));
+      rotate(calc(var(--kid-fall-rotation-direction) * 24deg));
   }
   100% {
     transform: translate(calc(var(--kid-fall-direction) * 25px), 31px)
-      rotate(calc(var(--kid-fall-direction) * -79deg));
+      rotate(calc(var(--kid-fall-rotation-direction) * 79deg));
     filter: saturate(0.42) brightness(0.88);
   }
 }
@@ -4302,18 +4318,11 @@ select:focus-visible {
   .kids.kids--berry > .kid {
     --kid-scale: calc(var(--formation-scale) * 0.88);
   }
-}
-
-@media (max-width: 820px) {
-  .kids.kids--pine > .kid,
-  .kids.kids--berry > .kid {
-    --kid-scale: calc(var(--formation-scale) * 0.72);
-  }
 
   /*
-   * Use the whole arena as the formation coordinate system on narrow screens.
-   * Each kid owns a fixed 96px box, so percentage-only placement would push
-   * Pine into the river and clip Berry's rear slot as the arena contracts.
+   * Use the whole arena as the formation coordinate system through tablet and
+   * mobile-landscape widths. Each kid owns a fixed 96px box, so percentage-only
+   * placement would push Pine into the river and clip Berry's rear slot.
    */
   .kids.kids--pine,
   .kids.kids--berry {
@@ -4322,18 +4331,87 @@ select:focus-visible {
     width: 100%;
   }
 
-  .kids.kids--pine > .kid:nth-child(1) { left: max(0px, calc(40% - 96px)); }
-  .kids.kids--pine > .kid:nth-child(2) { left: max(0px, calc(26.6667% - 64px)); }
-  .kids.kids--pine > .kid:nth-child(3) { left: max(0px, calc(13.3333% - 32px)); }
+  /*
+   * Keep a 32px visual buffer beside the river and distribute it across the
+   * formation. The frontline can then lean and lunge without stepping into it.
+   */
+  .kids.kids--pine > .kid:nth-child(1) { left: max(0px, calc(40% - 128px)); }
+  .kids.kids--pine > .kid:nth-child(2) { left: max(0px, calc(26.6667% - 85.3333px)); }
+  .kids.kids--pine > .kid:nth-child(3) { left: max(0px, calc(13.3333% - 42.6667px)); }
   .kids.kids--pine > .kid:nth-child(4) { left: 0; }
 
-  .kids.kids--berry > .kid:nth-child(1) { left: 60%; }
-  .kids.kids--berry > .kid:nth-child(2) { left: calc(73.3333% - 32px); }
-  .kids.kids--berry > .kid:nth-child(3) { left: calc(86.6667% - 64px); }
+  .kids.kids--berry > .kid:nth-child(1) { left: calc(60% + 32px); }
+  .kids.kids--berry > .kid:nth-child(2) { left: calc(73.3333% - 10.6667px); }
+  .kids.kids--berry > .kid:nth-child(3) { left: calc(86.6667% - 53.3333px); }
   .kids.kids--berry > .kid:nth-child(4) { left: calc(100% - 96px); }
+}
+
+@media (max-width: 820px) {
+  .kids.kids--pine > .kid,
+  .kids.kids--berry > .kid {
+    --kid-scale: calc(var(--formation-scale) * 0.72);
+  }
 
   .kid__action,
   .kid--berry .kid__action { top: -34px; }
+}
+
+@media (max-width: 560px), (max-width: 1120px) and (max-height: 600px) {
+  /*
+   * Small-screen battles keep their full match chrome while the keyboard is
+   * closed. Once the typing input receives focus, the arena and typing dock
+   * take priority. visualViewport tracks the space left by the keyboard.
+   */
+  .game-shell--battle {
+    min-height: var(--game-visual-viewport-height, 100dvh);
+  }
+
+  /*
+   * iOS may pan the visual viewport to the old input position before its
+   * keyboard resize finishes. Keep the entire battle shell aligned with the
+   * portion of the page Safari is actually showing until focus is released.
+   */
+  .game-shell--typing {
+    height: var(--game-visual-viewport-height, 100dvh);
+    max-height: var(--game-visual-viewport-height, 100dvh);
+    overflow: hidden;
+    overscroll-behavior: none;
+    transform: translateY(var(--game-visual-viewport-page-top, 0px));
+  }
+
+  .game-shell--typing > .language-switcher,
+  .game-shell--typing > .audio-controls,
+  .game-shell--typing .match-header,
+  .game-shell--typing .scoreboard {
+    display: none;
+  }
+
+  .game-shell--battle .match {
+    min-height: var(--game-visual-viewport-height, 100dvh);
+    padding-top: max(6px, env(safe-area-inset-top));
+    padding-bottom: max(6px, env(safe-area-inset-bottom));
+    gap: 8px;
+  }
+
+  .game-shell--typing .match {
+    height: var(--game-visual-viewport-height, 100dvh);
+    max-height: var(--game-visual-viewport-height, 100dvh);
+    overflow: hidden;
+  }
+
+  .game-shell--typing .arena {
+    min-height: clamp(
+      96px,
+      calc(var(--game-visual-viewport-height, 100dvh) - 134px),
+      820px
+    );
+    max-height: none;
+  }
+
+  .game-shell--battle .type-dock,
+  .game-shell--battle .type-box {
+    min-height: 104px;
+  }
 }
 
 @media (max-width: 560px) {

@@ -823,6 +823,7 @@ export default function SnowballGame() {
   const [countdown, setCountdown] = useState(3);
   const [winner, setWinner] = useState<Team | null>(null);
   const [inputError, setInputError] = useState(false);
+  const [typingInputFocused, setTypingInputFocused] = useState(false);
   const [announcement, setAnnouncement] = useState(language === "zh" ? "等待开战" : "Waiting for battle");
   const gameAudio = useGameAudio();
   const playSfx = gameAudio.playSfx;
@@ -830,6 +831,7 @@ export default function SnowballGame() {
   const playOutcomeMusic = gameAudio.playOutcomeMusic;
   const room = useRoomSocket({ autoResume: true });
 
+  const shellRef = useRef<HTMLElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const arenaRef = useRef<HTMLDivElement>(null);
   const kidNodesRef = useRef(new Map<string, HTMLDivElement>());
@@ -875,6 +877,104 @@ export default function SnowballGame() {
       ? language === "zh" ? "继续抢单词雪花！" : "Keep claiming word snowflakes!"
       : language === "zh" ? "等待开战" : "Waiting for battle");
   }, [language]);
+
+  useEffect(() => {
+    const shell = shellRef.current;
+    if (!shell) return;
+
+    const visualViewport = window.visualViewport;
+    let animationFrame: number | null = null;
+    let settleTimers: number[] = [];
+
+    const isBattleInputFocused = () => (
+      stageRef.current !== "lobby"
+      && document.activeElement === inputRef.current
+    );
+
+    const syncVisualViewport = () => {
+      const height = visualViewport?.height ?? window.innerHeight;
+      const pageTop = visualViewport?.pageTop ?? window.scrollY;
+      shell.style.setProperty("--game-visual-viewport-height", `${Math.round(height)}px`);
+      shell.style.setProperty("--game-visual-viewport-page-top", `${Math.max(0, Math.round(pageTop))}px`);
+    };
+
+    const resetDocumentScroll = (force = false) => {
+      if (!force && !isBattleInputFocused()) return;
+
+      const scrollingElement = document.scrollingElement;
+      if (scrollingElement && scrollingElement.scrollTop !== 0) scrollingElement.scrollTop = 0;
+      if (document.documentElement.scrollTop !== 0) document.documentElement.scrollTop = 0;
+      if (document.body.scrollTop !== 0) document.body.scrollTop = 0;
+      if (window.scrollX !== 0 || window.scrollY !== 0) window.scrollTo(0, 0);
+      syncVisualViewport();
+    };
+
+    const requestScrollReset = (force = false) => {
+      if (animationFrame !== null) window.cancelAnimationFrame(animationFrame);
+      animationFrame = window.requestAnimationFrame(() => {
+        resetDocumentScroll(force);
+        animationFrame = window.requestAnimationFrame(() => resetDocumentScroll(force));
+      });
+    };
+
+    const clearSettleTimers = () => {
+      settleTimers.forEach((timer) => window.clearTimeout(timer));
+      settleTimers = [];
+    };
+
+    const settleKeyboardViewport = (force = false) => {
+      clearSettleTimers();
+      syncVisualViewport();
+      requestScrollReset(force);
+
+      // iOS Safari can update visualViewport only after the keyboard animation.
+      settleTimers = [60, 160, 320, 520, 800, 1200].map((delay) => window.setTimeout(() => {
+        syncVisualViewport();
+        requestScrollReset(force);
+      }, delay));
+    };
+
+    const handleViewportChange = () => {
+      syncVisualViewport();
+      if (isBattleInputFocused()) settleKeyboardViewport();
+    };
+
+    const handleViewportScroll = () => {
+      syncVisualViewport();
+      if (isBattleInputFocused()) requestScrollReset();
+    };
+
+    const handleFocusIn = (event: FocusEvent) => {
+      if (event.target !== inputRef.current) return;
+      setTypingInputFocused(true);
+      settleKeyboardViewport();
+    };
+
+    const handleFocusOut = (event: FocusEvent) => {
+      if (event.target !== inputRef.current) return;
+      setTypingInputFocused(false);
+      settleKeyboardViewport(true);
+    };
+
+    syncVisualViewport();
+    window.addEventListener("resize", handleViewportChange);
+    window.addEventListener("scroll", handleViewportScroll, { passive: true });
+    document.addEventListener("focusin", handleFocusIn);
+    document.addEventListener("focusout", handleFocusOut);
+    visualViewport?.addEventListener("resize", handleViewportChange);
+    visualViewport?.addEventListener("scroll", handleViewportScroll);
+
+    return () => {
+      clearSettleTimers();
+      if (animationFrame !== null) window.cancelAnimationFrame(animationFrame);
+      window.removeEventListener("resize", handleViewportChange);
+      window.removeEventListener("scroll", handleViewportScroll);
+      document.removeEventListener("focusin", handleFocusIn);
+      document.removeEventListener("focusout", handleFocusOut);
+      visualViewport?.removeEventListener("resize", handleViewportChange);
+      visualViewport?.removeEventListener("scroll", handleViewportScroll);
+    };
+  }, []);
 
   const textNow = useCallback((chinese: string, english: string) => (
     languageRef.current === "zh" ? chinese : english
@@ -2256,7 +2356,10 @@ export default function SnowballGame() {
   };
 
   return (
-    <main className={`game-shell game-shell--${stage}`}>
+    <main
+      ref={shellRef}
+      className={`game-shell game-shell--${stage}${stage === "lobby" ? "" : " game-shell--battle"}${typingInputFocused ? " game-shell--typing" : ""}`}
+    >
       <LanguageSwitcher />
       <AudioControls audio={gameAudio} />
       <div className="ambient-snow" aria-hidden="true">
