@@ -93,13 +93,13 @@ The web app, room API, and WebSocket endpoint share one `workers.dev` origin, so
 
 The music menu always shows the current track, artist, CC0 license, and original OpenGameArt source. Lobby and battle choices are stored separately: the cheerful `Happy Synths` is the default lobby track, while the stronger `Black Diamond` starts with the countdown. Selecting a track starts it immediately; selecting a track for the other scene previews it for eight seconds before returning to the current scene. Shuffle stays inside the chosen scene and avoids an immediate repeat when the scene has more than one track.
 
-Music can be paused or disabled, sound effects can be disabled independently, and both have persistent volume sliders. The default music slider is 50%, producing half of the previous tuned output level. The packing and hit sounds are 0.18 and 0.19 seconds respectively, use reduced gain, and limit same-kind overlap during busy battles.
+Music can be paused or disabled, sound effects can be disabled independently, and both have persistent volume sliders. The default music slider is 50%, producing half of the previous tuned output level. The current player also gets a distinct 0.15-second confirmation cue the instant a snowball claim succeeds. Packing and hit sounds remain 0.18 and 0.19 seconds respectively; all three use reduced gain and limit same-kind overlap during busy battles.
 
 At the result screen, the battle track stops and a one-shot cue plays from the current player's perspective: `游戏胜利提示音效` for a win or `游戏失败` for a loss. Both user-provided Aigei cues can be previewed in the music panel and obey the same music switch, pause control, and volume slider.
 
 Browsers may wait for the first click or key press before allowing sound.
 
-All audio is bundled locally. The four background tracks were published as CC0 on OpenGameArt, while the three game sound effects are reproducible original synthesized waveforms released as CC0 by this project. The two result cues are user-provided Aigei downloads and retain their source terms; they are not relicensed as CC0 by this repository. See [`public/audio/AUDIO_LICENSES.md`](public/audio/AUDIO_LICENSES.md) for the complete source and license record.
+All audio is bundled locally. The four background tracks were published as CC0 on OpenGameArt, while the four game sound effects are reproducible original synthesized waveforms released as CC0 by this project. The two result cues are user-provided Aigei downloads and retain their source terms; they are not relicensed as CC0 by this repository. See [`public/audio/AUDIO_LICENSES.md`](public/audio/AUDIO_LICENSES.md) for the complete source and license record.
 
 ## Wordbook data
 

@@ -38,6 +38,37 @@ function normalize(samples, peakLevel = 0.88) {
   return samples;
 }
 
+function synthSnowballClaim() {
+  const duration = 0.15;
+  const samples = new Float64Array(Math.round(duration * SAMPLE_RATE));
+  const random = seededNoise(0x434c4149);
+  let softSnow = 0;
+  let previousNoise = 0;
+  let crystalPhase = 0;
+
+  for (let index = 0; index < samples.length; index += 1) {
+    const time = index / SAMPLE_RATE;
+    const noise = random();
+    softSnow = softSnow * 0.76 + noise * 0.24;
+    const icyGrain = noise - previousNoise * 0.72;
+    previousNoise = noise;
+
+    const catchPulse = pulse(time, 0.018, 0.025);
+    const confirmPulse = pulse(time, 0.058, 0.032);
+    const sparklePulse = pulse(time, 0.092, 0.038);
+    const crystalFrequency = 720 + time * 2_350;
+    crystalPhase += 2 * Math.PI * crystalFrequency / SAMPLE_RATE;
+    const crystal = Math.sin(crystalPhase) * (confirmPulse * 0.33 + sparklePulse * 0.22);
+    const snowCatch = softSnow * catchPulse * 0.46;
+    const snowSparkle = icyGrain * (confirmPulse + sparklePulse) * 0.12;
+    const endFade = clamp((duration - time) / 0.022, 0, 1);
+
+    samples[index] = (snowCatch + snowSparkle + crystal) * endFade;
+  }
+
+  return normalize(samples, 0.5);
+}
+
 function synthSnowballPack() {
   const duration = 0.18;
   const samples = new Float64Array(Math.round(duration * SAMPLE_RATE));
@@ -160,6 +191,7 @@ function encodePcmWav(samples) {
 }
 
 const effects = [
+  ["snowball-claimed.wav", synthSnowballClaim],
   ["snowball-pack.wav", synthSnowballPack],
   ["snowball-hit.wav", synthSnowballHit],
   ["player-down.wav", synthPlayerDown],

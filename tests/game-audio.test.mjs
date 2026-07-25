@@ -9,6 +9,7 @@ import {
   DEFAULT_SFX_VOLUME,
   GAME_AUDIO_STORAGE_KEY,
   GameAudioController,
+  getPersonalClaimSfxEventKey,
   MUSIC_OUTPUT_GAIN,
   MUSIC_PREVIEW_DURATION_MS,
   MUSIC_TRACKS,
@@ -227,6 +228,21 @@ test("personal match results resolve to victory or defeat from the current playe
   assert.equal(resolvePersonalOutcome("pine", null), null);
 });
 
+test("online claim feedback is scoped to the current player and stable claim ID", () => {
+  assert.equal(
+    getPersonalClaimSfxEventKey("SNOW12", "claim-7", "player-self", "player-self"),
+    "SNOW12:claim:claim-7",
+  );
+  assert.equal(
+    getPersonalClaimSfxEventKey("SNOW12", "claim-7", "player-other", "player-self"),
+    null,
+  );
+  assert.equal(
+    getPersonalClaimSfxEventKey("SNOW12", "claim-7", "player-self", null),
+    null,
+  );
+});
+
 test("user-provided Aigei victory and defeat cues are packaged with source records", async () => {
   assert.deepEqual(Object.keys(OUTCOME_MUSIC_TRACKS), ["victory", "defeat"]);
   assert.deepEqual(
@@ -430,29 +446,33 @@ test("a rejected autoplay exposes blocked state and a later gesture can recover"
   controller.destroy();
 });
 
-test("short effects overlap across kinds but repeated pack sounds are throttled and volume-scaled", async () => {
+test("claim feedback and combat effects overlap across kinds while repeats are throttled and volume-scaled", async () => {
   const { advanceTime, audios, controller } = createHarness();
   controller.mount();
   assert.deepEqual(await Promise.all([
+    controller.playSfx("claim"),
+    controller.playSfx("claim"),
     controller.playSfx("pack"),
     controller.playSfx("pack"),
     controller.playSfx("hit"),
     controller.playSfx("down"),
-  ]), [true, false, true, true]);
+  ]), [true, false, true, false, true, true]);
   const effects = audios.slice(1);
   assert.deepEqual(effects.map((audio) => audio.src), [
+    SFX_SOURCES.claim,
     SFX_SOURCES.pack,
     SFX_SOURCES.hit,
     SFX_SOURCES.down,
   ]);
-  assert.equal(effects[0].volume, SFX_OUTPUT_GAINS.pack * DEFAULT_SFX_VOLUME);
-  assert.equal(effects[1].volume, SFX_OUTPUT_GAINS.hit * DEFAULT_SFX_VOLUME);
+  assert.equal(effects[0].volume, SFX_OUTPUT_GAINS.claim * DEFAULT_SFX_VOLUME);
+  assert.equal(effects[1].volume, SFX_OUTPUT_GAINS.pack * DEFAULT_SFX_VOLUME);
+  assert.equal(effects[2].volume, SFX_OUTPUT_GAINS.hit * DEFAULT_SFX_VOLUME);
 
   await advanceTime(100);
   assert.equal(await controller.playSfx("pack"), true);
   await advanceTime(100);
   assert.equal(await controller.playSfx("pack"), false);
-  effects[0].emit("ended");
+  effects[1].emit("ended");
   assert.equal(await controller.playSfx("pack"), true);
 
   controller.setSfxVolume(0.8);
@@ -463,10 +483,12 @@ test("short effects overlap across kinds but repeated pack sounds are throttled 
   controller.destroy();
 });
 
-test("generated pack and hit WAV files stay at or below 0.2 seconds", async () => {
+test("generated claim, pack, and hit WAV files stay at or below 0.2 seconds", async () => {
+  const claim = await readFile(new URL("../public/audio/sfx/snowball-claimed.wav", import.meta.url));
   const pack = await readFile(new URL("../public/audio/sfx/snowball-pack.wav", import.meta.url));
   const hit = await readFile(new URL("../public/audio/sfx/snowball-hit.wav", import.meta.url));
   const down = await readFile(new URL("../public/audio/sfx/player-down.wav", import.meta.url));
+  assert.ok(readWavDuration(claim) > 0.1 && readWavDuration(claim) <= 0.2);
   assert.ok(readWavDuration(pack) > 0.12 && readWavDuration(pack) <= 0.2);
   assert.ok(readWavDuration(hit) > 0.12 && readWavDuration(hit) <= 0.2);
   assert.ok(readWavDuration(down) > 0.5);

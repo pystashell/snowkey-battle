@@ -16,7 +16,7 @@ import { AudioControls } from "./AudioControls";
 import { LanguageSwitcher, useLanguage } from "./LanguageContext";
 import type { UiLanguage } from "./language";
 import { useGameAudio } from "./useGameAudio";
-import { resolvePersonalOutcome } from "./game-audio";
+import { getPersonalClaimSfxEventKey, resolvePersonalOutcome } from "./game-audio";
 import {
   COMPACT_KEYBOARD_LAYOUT,
   MOBILE_KEYBOARD_MEDIA_QUERY,
@@ -1787,6 +1787,7 @@ export default function SnowballGame() {
 
       let damage = word.kind === "frost" ? FROST_DAMAGE : calculateWordDamage(word.text.length);
       if (player.isUser) {
+        playSfx("claim");
         clearTargetWord();
         const nextCombo = now - lastClaimRef.current < 4200 ? comboRef.current + 1 : 1;
         comboRef.current = nextCombo;
@@ -1819,7 +1820,7 @@ export default function SnowballGame() {
       registerClaim(player.id);
       launchSnowball(player, word, damage);
     },
-    [clearTargetWord, launchSnowball, pruneExpiredWords, registerClaim, say],
+    [clearTargetWord, launchSnowball, playSfx, pruneExpiredWords, registerClaim, say],
   );
 
   useEffect(() => {
@@ -1830,6 +1831,15 @@ export default function SnowballGame() {
     if (event.type === "word.claimed") {
       const attacker = playersRef.current.find((player) => player.id === event.attackerId);
       if (!attacker) return;
+      const claimSfxEventKey = getPersonalClaimSfxEventKey(
+        onlineSnapshot.code,
+        event.claimId,
+        event.attackerId,
+        onlineSnapshot.selfPlayerId,
+      );
+      if (claimSfxEventKey && rememberRoomAudioEvent(claimSfxEventKey)) {
+        playSfx("claim");
+      }
       const claimedWord = mapRoomWord(event.word, onlineSnapshot, onlineServerTimeOffsetMs);
       launchSnowball(attacker, claimedWord, event.damage, {
         authoritative: true,

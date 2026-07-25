@@ -97,33 +97,47 @@ export function resolvePersonalOutcome(
   return winner === playerTeam ? "victory" : "defeat";
 }
 
+export function getPersonalClaimSfxEventKey(
+  roomCode: string,
+  claimId: string,
+  attackerId: string,
+  selfPlayerId: string | null,
+) {
+  if (!selfPlayerId || attackerId !== selfPlayerId) return null;
+  return `${roomCode}:claim:${claimId}`;
+}
+
 export const DEFAULT_MUSIC_VOLUME = 0.5;
 export const DEFAULT_SFX_VOLUME = 0.5;
 export const MUSIC_OUTPUT_GAIN = 0.32;
 export const OUTCOME_MUSIC_GAIN = 1.5;
 export const MUSIC_PREVIEW_DURATION_MS = 8_000;
 
-export type GameSfx = "pack" | "hit" | "down";
+export type GameSfx = "claim" | "pack" | "hit" | "down";
 
 export const SFX_SOURCES: Readonly<Record<GameSfx, string>> = Object.freeze({
+  claim: "/audio/sfx/snowball-claimed.wav",
   pack: "/audio/sfx/snowball-pack.wav",
   hit: "/audio/sfx/snowball-hit.wav",
   down: "/audio/sfx/player-down.wav",
 });
 
 export const SFX_OUTPUT_GAINS: Readonly<Record<GameSfx, number>> = Object.freeze({
+  claim: 0.5,
   pack: 0.38,
   hit: 0.55,
   down: 0.82,
 });
 
 const SFX_COOLDOWNS_MS: Readonly<Record<GameSfx, number>> = Object.freeze({
+  claim: 55,
   pack: 90,
   hit: 55,
   down: 80,
 });
 
 const SFX_CONCURRENCY_LIMITS: Readonly<Record<GameSfx, number>> = Object.freeze({
+  claim: 3,
   pack: 2,
   hit: 3,
   down: 2,
@@ -355,6 +369,7 @@ export class GameAudioController {
   private music: HTMLAudioElement | null = null;
   private activeSfx = new Map<HTMLAudioElement, ActiveSfx>();
   private lastSfxStartedAt: Record<GameSfx, number> = {
+    claim: Number.NEGATIVE_INFINITY,
     pack: Number.NEGATIVE_INFINITY,
     hit: Number.NEGATIVE_INFINITY,
     down: Number.NEGATIVE_INFINITY,

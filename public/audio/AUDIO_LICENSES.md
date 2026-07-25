@@ -6,19 +6,20 @@ OpenGameArt 或爱给网的文件，因此播放过程不依赖第三方音频�
 
 ## 自制游戏音效
 
-以下三段音效不含录音、采样包或第三方素材，由
+以下四段音效不含录音、采样包或第三方素材，由
 [`scripts/generate-web-sfx.mjs`](../../scripts/generate-web-sfx.mjs)
-以确定性的数学波形和伪随机噪声合成。项目仅将这三段生成音效按
+以确定性的数学波形和伪随机噪声合成。项目仅将这四段生成音效按
 [CC0 1.0 Universal](https://creativecommons.org/publicdomain/zero/1.0/)
 发布，可复制、修改及用于商业项目，无需署名。
 
 | 用途 | 浏览器资源路径 | 声音设计 |
 | --- | --- | --- |
+| 当前玩家抢到雪球 | `/audio/sfx/snowball-claimed.wav` | 0.15 秒的轻柔接雪声与上扬冰晶确认音，只用于提示“这颗雪球是我抢到的” |
 | 搓、压实雪球 | `/audio/sfx/snowball-pack.wav` | 0.18 秒的雪粒摩擦、抓紧与短促“咯吱”压实声 |
 | 雪球击中 | `/audio/sfx/snowball-hit.wav` | 0.19 秒的柔和雪团接触、碎雪爆开声，无金属或长共鸣尾音 |
 | 角色倒下 | `/audio/sfx/player-down.wav` | 下坠音高、柔和落地冲击和雪面沉降尾音 |
 
-重新生成三段自制音效：
+重新生成四段自制音效：
 
 ```powershell
 node scripts/generate-web-sfx.mjs
