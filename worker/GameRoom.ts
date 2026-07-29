@@ -59,6 +59,13 @@ function jsonResponse(body: unknown, status = 200) {
   });
 }
 
+function logRoomError(event: string, error: unknown) {
+  console.error(JSON.stringify({
+    event,
+    error: error instanceof Error ? error.message : String(error),
+  }));
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -158,7 +165,7 @@ export class GameRoom {
         this.broadcastMutation(result, now);
         await this.scheduleNextAlarm();
       } catch (error) {
-        console.error("Unable to restore game room", error);
+        logRoomError("room.restore.failed", error);
         this.engine = null;
         this.lastActivityAt = 0;
         this.lastSequenceBySession = {};
@@ -240,7 +247,7 @@ export class GameRoom {
   }
 
   async webSocketError(socket: WebSocket, error: unknown): Promise<void> {
-    console.error("Game room WebSocket error", error);
+    logRoomError("room.websocket.error", error);
     await this.disconnectSocket(socket);
   }
 
@@ -700,7 +707,7 @@ export class GameRoom {
     try {
       socket.send(JSON.stringify(message));
     } catch (error) {
-      console.error("Unable to send game room message", error);
+      logRoomError("room.websocket.send_failed", error);
     }
   }
 
@@ -709,7 +716,7 @@ export class GameRoom {
     try {
       socket.close(code, reason.slice(0, 120));
     } catch (error) {
-      console.error("Unable to close game room socket", error);
+      logRoomError("room.websocket.close_failed", error);
     }
   }
 

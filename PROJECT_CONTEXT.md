@@ -1,6 +1,15 @@
 # SnowKey Battle project context
 
-Last handoff update: 2026-07-26
+Last handoff update: 2026-07-29
+
+## v1.0.0 release candidate
+
+- The public-browser release candidate is on `codex/release-v1.0.0`; it has not yet been tagged or deployed to the production Worker.
+- Release work adds current framework and Cloudflare dependencies, removes unused starter D1 scaffolding, publishes canonical/social/manifest/robots/sitemap metadata, adds a bilingual privacy notice and release footer, and applies document security headers plus structured Worker error logs. The authoritative room protocol and battle rules are unchanged.
+- `RELEASE.md` is the platform matrix and launch checklist. Cloudflare Workers remains the only unchanged full-game target; ChatGPT Sites stays a separate local-mode/page surface.
+- Validation completed on 2026-07-29: 77 Node tests, lint, typecheck, production build, zero findings from `npm audit --omit=dev --omit=optional`, generated-Worker dry deployment, local live room smoke/reclaim tests, and a complete match in two independent browser profiles. The browser pair agreed on room membership, readiness, match start, health, knockout state, and the Berry-team result; the controlled browser logged no warning or error.
+- A full development-tree audit still reports 11 high advisories: the ESLint-only chain is affected by `brace-expansion`/`minimatch`, while Next is reported only through its optional native `sharp` dependency. Neither chain is present in the audited production Worker dependency set; do not describe the full audit as clean.
+- The remaining promotion gate is publisher confirmation that the two Aigei result cues may be redistributed publicly, or replacement with cleared alternatives. After that confirmation, deploy the Worker, rerun the live suite against the exact production URL, verify the deployed Cloudflare version, then tag/publish `v1.0.0`.
 
 ## Product goal
 

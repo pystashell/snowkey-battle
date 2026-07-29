@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import {
   type CSSProperties,
   type ChangeEvent,
@@ -3107,6 +3108,23 @@ export default function SnowballGame() {
             )}
           </div>
         </section>
+      )}
+
+      {stage === "lobby" && (
+        <footer className="release-footer">
+          <span>SnowKey Battle v1.0.0</span>
+          <nav aria-label={text("发布信息", "Release information")}>
+            <Link href="/privacy">{text("隐私", "Privacy")}</Link>
+            <a href="/audio/AUDIO_LICENSES.md">{text("音频许可", "Audio licenses")}</a>
+            <a
+              href="https://github.com/pystashell/snowkey-battle"
+              target="_blank"
+              rel="noreferrer"
+            >
+              GitHub ↗
+            </a>
+          </nav>
+        </footer>
       )}
 
       <div className="sr-only" aria-live="assertive">

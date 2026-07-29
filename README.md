@@ -4,6 +4,8 @@
 
 [Play the live game](https://snow-fighting-game.pystashell.workers.dev/) · [中文说明](#中文说明)
 
+Current browser release: **v1.0.0**.
+
 SnowKey Battle is a browser remake of a childhood multiplayer typing game. English words fall as snowflakes: type one before anyone else to catch it, pack it into a snowball, and throw it at the opposing team. The character art is drawn from scratch with CSS and only takes visual inspiration from the warm, rounded winter outfits of [Snowcraft](https://github.com/seanpm2001/Snowcraft); no original Snowcraft sprites or assets are included.
 
 ## Highlights
@@ -56,6 +58,7 @@ The Cloudflare Worker is the referee. Clients only send lobby commands and keyst
 ```bash
 npm test
 npm run lint
+npm run deploy:dry
 ```
 
 Run the real-room test suite against a running local server. It includes the
@@ -89,6 +92,8 @@ npm run deploy
 
 The web app, room API, and WebSocket endpoint share one `workers.dev` origin, so no separate server or cross-origin configuration is required.
 
+Cloudflare Workers is the canonical full-game deployment target. Static-only hosts such as GitHub Pages can publish a front end, but cannot run this repository's authoritative WebSocket and Durable Object room service unchanged. The separate ChatGPT Sites deployment can present the page and local mode, but is not the multiplayer source of truth. See [`RELEASE.md`](RELEASE.md) for the platform matrix and production checklist.
+
 ## Audio assets
 
 The music menu always shows the current track, artist, CC0 license, and original OpenGameArt source. Lobby and battle choices are stored separately: the cheerful `Happy Synths` is the default lobby track, while the stronger `Black Diamond` starts with the countdown. Selecting a track starts it immediately; selecting a track for the other scene previews it for eight seconds before returning to the current scene. Shuffle stays inside the chosen scene and avoids an immediate repeat when the scene has more than one track.
@@ -101,6 +106,8 @@ Browsers may wait for the first click or key press before allowing sound.
 
 All audio is bundled locally. The four background tracks were published as CC0 on OpenGameArt, while the four game sound effects are reproducible original synthesized waveforms released as CC0 by this project. The two result cues are user-provided Aigei downloads and retain their source terms; they are not relicensed as CC0 by this repository. See [`public/audio/AUDIO_LICENSES.md`](public/audio/AUDIO_LICENSES.md) for the complete source and license record.
 
+Before a broad public launch, the publisher must retain the original Aigei download or purchase records that authorize redistribution of the two result cues, or replace those files with cleared alternatives.
+
 ## Wordbook data
 
 The CET-4, CET-6, Postgraduate English, TOEFL, and SAT-oriented books are generated from [ECDICT](https://github.com/skywind3000/ECDICT), pinned to revision `bc015ed2e24a7abef49fc6dbbb7fe32c1dadaf8b`. ECDICT is distributed under the MIT License; its license copy is included in this repository. TOEFL uses ECDICT's `toefl` tag. Because ECDICT has no dedicated SAT tag, the SAT-oriented book combines its TOEFL and IELTS academic-reading tags and is explicitly not an official College Board list. A small set of 18–24-letter game challenge words is added only to CET-4, CET-6, and Postgraduate English and must not be interpreted as an official exam syllabus.
@@ -110,6 +117,12 @@ Regenerate the academic wordbooks with:
 ```bash
 npm run generate:wordbooks
 ```
+
+## Privacy and repository license
+
+The public game requires no account and includes no advertising or third-party behavioral analytics. The in-game [privacy notice](https://snow-fighting-game.pystashell.workers.dev/privacy) explains local settings, reconnect credentials, temporary room data, and Cloudflare's role as the hosting provider.
+
+This repository has no project-wide open-source license. Public visibility does not grant permission to copy, modify, or redistribute the game code. The bundled ECDICT data and audio assets remain governed by their own licenses or source terms.
 
 ## 中文说明
 

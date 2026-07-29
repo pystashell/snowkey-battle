@@ -1,13 +1,13 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-async function render(acceptLanguage, cookie) {
+async function render(acceptLanguage, cookie, pathname = "/") {
   const workerUrl = new URL("../dist/server/index.js", import.meta.url);
   workerUrl.searchParams.set("test", `${process.pid}-${Date.now()}`);
   const { default: worker } = await import(workerUrl.href);
 
   return worker.fetch(
-    new Request("http://localhost/", {
+    new Request(`http://localhost${pathname}`, {
       headers: {
         accept: "text/html",
         "accept-language": acceptLanguage,
@@ -30,9 +30,13 @@ test("server-renders the Chinese snow fighting game for a Chinese browser", asyn
   const response = await render("zh-CN,zh;q=0.9,en;q=0.8");
   assert.equal(response.status, 200);
   assert.match(response.headers.get("content-type") ?? "", /^text\/html\b/i);
+  assert.match(response.headers.get("content-security-policy") ?? "", /default-src 'self'/);
+  assert.equal(response.headers.get("x-content-type-options"), "nosniff");
+  assert.equal(response.headers.get("x-frame-options"), "DENY");
 
   const html = await response.text();
-  assert.match(html, /<title>河岸雪仗/);
+  assert.match(html, /<title>SnowKey Battle · 河岸雪仗/);
+  assert.match(html, /property="og:image" content="https?:\/\/[^"]+\/og\.png"/);
   assert.match(html, /SNOWCRAFT-INSPIRED TACTICAL REMAKE/);
   assert.match(html, /全英文单词竞速/);
   assert.match(html, /好友联机/);
@@ -67,6 +71,8 @@ test("server-renders the Chinese snow fighting game for a Chinese browser", asyn
   assert.match(html, /新雪球锁定当前前排/);
   assert.match(html, /全员 100 HP/);
   assert.doesNotMatch(html, /肉盾|快手|职业与速度/);
+  assert.match(html, /SnowKey Battle v1\.0\.0/);
+  assert.match(html, /href="\/privacy"/);
   assert.doesNotMatch(html, /codex-preview|react-loading-skeleton|Your site is taking shape/i);
 });
 
@@ -75,7 +81,7 @@ test("server-renders the complete English lobby for a non-Chinese browser", asyn
   assert.equal(response.status, 200);
   const html = await response.text();
   assert.match(html, /<html lang="en"/);
-  assert.match(html, /<title>Riverbank Snow Battle/);
+  assert.match(html, /<title>SnowKey Battle · Riverbank Snow Battle/);
   assert.match(html, /Race to type English words/);
   assert.match(html, /Online with Friends/);
   assert.match(html, /title="Remove AI"[^>]*>−<\/button>/);
@@ -106,6 +112,22 @@ test("server-renders the complete English lobby for a non-Chinese browser", asyn
   assert.match(html, /aria-label="Game audio"/);
   assert.match(html, /Lobby music/);
   assert.match(html, /Preparing audio/);
+});
+
+test("publishes a bilingual privacy notice without account or advertising claims", async () => {
+  const chinese = await render("zh-CN", undefined, "/privacy");
+  assert.equal(chinese.status, 200);
+  const chineseHtml = await chinese.text();
+  assert.match(chineseHtml, /隐私说明/);
+  assert.match(chineseHtml, /不要求注册账号/);
+  assert.match(chineseHtml, /掉线席位保留 60 秒/);
+
+  const english = await render("en-US", undefined, "/privacy");
+  assert.equal(english.status, 200);
+  const englishHtml = await english.text();
+  assert.match(englishHtml, /Privacy Notice/);
+  assert.match(englishHtml, /requires no account/);
+  assert.match(englishHtml, /six-hour idle fallback/);
 });
 
 test("the language cookie overrides the browser language", async () => {

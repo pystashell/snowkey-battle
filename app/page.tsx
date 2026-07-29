@@ -7,12 +7,12 @@ export async function generateMetadata(): Promise<Metadata> {
   const language = await getRequestLanguage();
   return language === "zh"
     ? {
-        title: { absolute: "河岸雪仗 · Snow Type Battle" },
-        description: "打出飘落的英文单词，调整 1–4 人阵型，用前排替队友挡住隔河飞来的雪球。",
+        title: { absolute: "SnowKey Battle · 河岸雪仗" },
+        description: "打出飘落的英文单词，调整 1–4 人阵型，与好友隔着冰河实时打雪仗。",
       }
     : {
-        title: { absolute: "Riverbank Snow Battle · Snow Type Battle" },
-        description: "Type falling English words, arrange teams of 1–4, and let the frontline shield teammates from incoming snowballs.",
+        title: { absolute: "SnowKey Battle · Riverbank Snow Battle" },
+        description: "Type falling English words, arrange teams of 1–4, and battle friends across a frozen river in real time.",
       };
 }
 

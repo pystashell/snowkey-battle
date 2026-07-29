@@ -1,4 +1,4 @@
-/** Cloudflare Worker entry point for the vinext-starter template. */
+/** Cloudflare Worker entry point for SnowKey Battle. */
 import handler from "vinext/server/app-router-entry";
 import {
   type CreateRoomRequest,
@@ -12,17 +12,27 @@ export { GameRoom };
 const ROOM_CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
 const MAX_CREATE_BODY_BYTES = 2 * 1024;
 const MAX_ROOM_CODE_ATTEMPTS = 12;
+const DOCUMENT_SECURITY_POLICY = [
+  "default-src 'self'",
+  "base-uri 'self'",
+  "connect-src 'self' ws: wss:",
+  "font-src 'self' data:",
+  "form-action 'self'",
+  "img-src 'self' data: blob:",
+  "manifest-src 'self'",
+  "media-src 'self' blob:",
+  "object-src 'none'",
+  "script-src 'self' 'unsafe-inline'",
+  "style-src 'self' 'unsafe-inline'",
+  "worker-src 'self' blob:",
+].join("; ");
 
-interface Env {
-  ASSETS: Fetcher;
-  DB: D1Database;
-  GAME_ROOMS: DurableObjectNamespace;
-}
-
-interface ExecutionContext {
-  waitUntil(promise: Promise<unknown>): void;
-  passThroughOnException(): void;
-}
+const COMMON_SECURITY_HEADERS = {
+  "Cross-Origin-Resource-Policy": "same-origin",
+  "Permissions-Policy": "camera=(), geolocation=(), microphone=()",
+  "Referrer-Policy": "strict-origin-when-cross-origin",
+  "X-Content-Type-Options": "nosniff",
+} as const;
 
 function jsonResponse(body: unknown, status = 200) {
   return new Response(JSON.stringify(body), {
@@ -30,7 +40,35 @@ function jsonResponse(body: unknown, status = 200) {
     headers: {
       "Cache-Control": "no-store",
       "Content-Type": "application/json; charset=utf-8",
+      ...COMMON_SECURITY_HEADERS,
     },
+  });
+}
+
+function secureDocumentResponse(response: Response, requestUrl: URL) {
+  const headers = new Headers(response.headers);
+  for (const [name, value] of Object.entries(COMMON_SECURITY_HEADERS)) {
+    headers.set(name, value);
+  }
+
+  if (headers.get("Content-Type")?.toLowerCase().includes("text/html")) {
+    const isChatGptSite = requestUrl.hostname.endsWith(".chatgpt.site");
+    headers.set(
+      "Content-Security-Policy",
+      `${DOCUMENT_SECURITY_POLICY}${isChatGptSite ? "" : "; frame-ancestors 'none'"}`,
+    );
+    if (!isChatGptSite) {
+      headers.set("X-Frame-Options", "DENY");
+    }
+  }
+  if (requestUrl.protocol === "https:") {
+    headers.set("Strict-Transport-Security", "max-age=31536000");
+  }
+
+  return new Response(response.body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers,
   });
 }
 
@@ -105,7 +143,11 @@ async function createRoom(request: Request, env: Env) {
       return jsonResponse(body, 201);
     }
     if (response.status !== 409) {
-      console.error("Unable to initialize game room", response.status, await response.text());
+      console.error(JSON.stringify({
+        event: "room.initialize.failed",
+        status: response.status,
+        detail: await response.text(),
+      }));
       return jsonResponse({ error: "Unable to initialize room" }, 500);
     }
   }
@@ -150,8 +192,9 @@ const worker = {
       return env.GAME_ROOMS.getByName(roomCode).fetch(request);
     }
 
-    return handler.fetch(request, env, ctx);
+    const response = await handler.fetch(request, env, ctx);
+    return secureDocumentResponse(response, url);
   },
-};
+} satisfies ExportedHandler<Env>;
 
 export default worker;
