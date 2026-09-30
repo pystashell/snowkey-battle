@@ -330,6 +330,7 @@ export class RoomEngine {
   private state: EngineState;
   private random: RandomSource;
   private wordbooks: Record<WordbookId, readonly string[]>;
+  private wordPools = new Map<WordbookId, ReturnType<typeof buildWordPools>>();
 
   private constructor(state: EngineState, options: RoomEngineOptions = {}) {
     this.state = state;
@@ -720,7 +721,7 @@ export class RoomEngine {
       aiClaimAt: timing?.claimAt ?? null,
     };
     this.state.words.push(word);
-    const pools = buildWordPools(this.wordbooks[this.state.config.wordbookId]);
+    const pools = this.getWordPools();
     if (kind === "frost") {
       const historySize = Math.min(3, Math.max(1, pools.frostWords.length - 1));
       this.state.recentFrostWords = [...this.state.recentFrostWords, text].slice(-historySize);
@@ -923,8 +924,8 @@ export class RoomEngine {
     if (!Number.isInteger(next.pineSize) || !Number.isInteger(next.berrySize) || next.pineSize < 1 || next.pineSize > 4 || next.berrySize < 1 || next.berrySize > 4) {
       return this.failure("INVALID_TEAM_SIZE", "Each team must contain one to four active seats.", events);
     }
-    if (!(next.wordbookId in this.wordbooks)) return this.failure("INVALID_WORDBOOK", "Unknown wordbook.", events);
-    if (!(next.snowfallLevel in SNOWFALL_PROFILES)) return this.failure("INVALID_SNOWFALL", "Unknown snowfall level.", events);
+    if (typeof next.wordbookId !== "string" || !Object.hasOwn(this.wordbooks, next.wordbookId)) return this.failure("INVALID_WORDBOOK", "Unknown wordbook.", events);
+    if (typeof next.snowfallLevel !== "string" || !Object.hasOwn(SNOWFALL_PROFILES, next.snowfallLevel)) return this.failure("INVALID_SNOWFALL", "Unknown snowfall level.", events);
     for (const team of ["pine", "berry"] as const) {
       const desired = team === "pine" ? next.pineSize : next.berrySize;
       if (this.humanPlayers().filter((player) => player.team === team).length > desired) {
@@ -1007,7 +1008,7 @@ export class RoomEngine {
   private setAiLevel(actor: InternalPlayer, playerId: string, level: AiLevel, events: RoomEvent[]): EngineResult {
     if (this.state.phase !== "lobby") return this.failure("WRONG_STAGE", "AI level can only change in the lobby.", events);
     if (actor.controller.kind !== "human" || !actor.controller.isHost) return this.failure("HOST_ONLY", "Only the host can configure AI.", events);
-    if (!(level in AI_LEVELS)) return this.failure("INVALID_AI_LEVEL", "Unknown AI difficulty.", events);
+    if (typeof level !== "string" || !Object.hasOwn(AI_LEVELS, level)) return this.failure("INVALID_AI_LEVEL", "Unknown AI difficulty.", events);
     const target = this.state.players.find((player) => player.active && player.id === playerId);
     if (!target || target.controller.kind !== "ai") return this.failure("NOT_AN_AI", "The selected seat is not controlled by AI.", events);
     target.controller.level = level;
@@ -1154,9 +1155,8 @@ export class RoomEngine {
       resolved: false,
     };
     this.state.pendingAttacks.push(attack);
-    for (const [playerId, typing] of Object.entries(this.state.typingByPlayer)) {
-      if (typing.targetWordId === word.id || playerId === attacker.id) this.clearTyping(playerId);
-    }
+    this.clearTyping(attacker.id);
+    this.reconcileTypingWithWords();
     this.emit(events, {
       type: "word.claimed",
       claimId,
@@ -1175,6 +1175,16 @@ export class RoomEngine {
 
   private frontline(team: Team) {
     return this.activePlayers(team).filter((player) => player.health > 0).sort((a, b) => a.position - b.position)[0] ?? null;
+  }
+
+  private reconcileTypingWithWords() {
+    for (const [playerId, typing] of Object.entries(this.state.typingByPlayer)) {
+      const targetExists = typing.targetWordId === null
+        || this.state.words.some((word) => word.id === typing.targetWordId);
+      const prefixExists = !typing.buffer
+        || this.state.words.some((word) => word.text.startsWith(typing.buffer));
+      if (!targetExists || !prefixExists) this.clearTyping(playerId);
+    }
   }
 
   private nextTask(includeDeferredEvents = true): DueTask | null {
@@ -1250,16 +1260,8 @@ export class RoomEngine {
         candidate.id === Number(task.id) && candidate.expiresAt === task.at
       ));
       if (wordIndex < 0) return;
-      const [expiredWord] = this.state.words.splice(wordIndex, 1);
-      for (const [playerId, typing] of Object.entries(this.state.typingByPlayer)) {
-        if (typing.targetWordId === expiredWord.id) {
-          this.clearTyping(playerId);
-          continue;
-        }
-        if (typing.buffer && !this.state.words.some((word) => word.text.startsWith(typing.buffer))) {
-          this.clearTyping(playerId);
-        }
-      }
+      this.state.words.splice(wordIndex, 1);
+      this.reconcileTypingWithWords();
       this.touch();
       return;
     }
@@ -1466,7 +1468,7 @@ export class RoomEngine {
 
   private drawFrostWord(activeTexts: Set<string>) {
     this.reconcileWordBagBook();
-    const pool = buildWordPools(this.wordbooks[this.state.config.wordbookId]).frostWords;
+    const pool = this.getWordPools().frostWords;
     const draw = drawWordFromBag({
       bag: this.state.frostWordBag,
       pool,
@@ -1481,7 +1483,7 @@ export class RoomEngine {
 
   private drawWord(activeTexts: Set<string>) {
     this.reconcileWordBagBook();
-    const pool = buildWordPools(this.wordbooks[this.state.config.wordbookId]).regularWords;
+    const pool = this.getWordPools().regularWords;
     const draw = drawWordFromBag({
       bag: this.state.wordBag,
       pool,
@@ -1503,6 +1505,16 @@ export class RoomEngine {
       this.state.recentWords = [];
       this.state.recentFrostWords = [];
     }
+  }
+
+  private getWordPools() {
+    const bookId = this.state.config.wordbookId;
+    let pools = this.wordPools.get(bookId);
+    if (!pools) {
+      pools = buildWordPools(this.wordbooks[bookId]);
+      this.wordPools.set(bookId, pools);
+    }
+    return pools;
   }
 }
 

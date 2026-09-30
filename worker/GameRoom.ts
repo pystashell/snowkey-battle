@@ -1,11 +1,14 @@
 import { WORD_BOOKS } from "../app/wordbooks";
 import { RoomEngine } from "../shared/room-engine";
+import { isCommandMessage } from "../shared/command-validation";
+import { ADMISSION_BUDGETS, COMMAND_BUDGET, consumeToken, type TokenBucket } from "./rate-limit";
 import {
   GAME_PROTOCOL_VERSION,
   type CommandMessage,
   type CreateRoomRequest,
   type JoinMessage,
   type RoomEvent,
+  type RoomSnapshot,
   type ServerMessage,
 } from "../shared/game-protocol";
 
@@ -16,6 +19,8 @@ const JOIN_TIMEOUT_MS = 10 * 1000;
 const MAX_SOCKET_CONNECTIONS = 16;
 const MAX_CLIENT_MESSAGE_BYTES = 4 * 1024;
 const MAX_NAME_LENGTH = 8;
+const ADMISSION_KEY = "admission";
+const ADMISSION_TTL_MS = 10 * 60 * 1000;
 const ROOM_ENGINE_OPTIONS = {
   wordbooks: {
     winter: WORD_BOOKS.winter.words,
@@ -42,9 +47,9 @@ type StoredRoom = {
 type SocketAttachment = {
   joined: boolean;
   sessionId: string | null;
-  playerId: string | null;
   lastSequence: number;
   connectedAt: number;
+  commandBudget?: TokenBucket;
 };
 
 type MutationResult = ReturnType<RoomEngine["advance"]>;
@@ -96,25 +101,10 @@ function isJoinMessage(value: unknown): value is JoinMessage {
   );
 }
 
-function isCommandMessage(value: unknown): value is CommandMessage {
-  if (!isRecord(value) || !isRecord(value.command)) return false;
-  return (
-    value.v === GAME_PROTOCOL_VERSION &&
-    value.type === "command" &&
-    typeof value.id === "string" &&
-    value.id.length > 0 &&
-    value.id.length <= 128 &&
-    Number.isSafeInteger(value.sequence) &&
-    Number(value.sequence) >= 0 &&
-    typeof value.command.op === "string"
-  );
-}
-
 function defaultAttachment(connectedAt = Date.now()): SocketAttachment {
   return {
     joined: false,
     sessionId: null,
-    playerId: null,
     lastSequence: -1,
     connectedAt,
   };
@@ -179,6 +169,25 @@ export class GameRoom {
   async fetch(request: Request): Promise<Response> {
     const url = new URL(request.url);
 
+    // Admission objects use the existing namespace, but separate non-room names.
+    if (request.method === "POST" && url.pathname.startsWith("/internal/admission/")) {
+      const kind = url.pathname.slice("/internal/admission/".length);
+      if (kind !== "create" && kind !== "join") return jsonResponse({ error: "Invalid budget" }, 400);
+      const result = await this.ctx.storage.transaction(async (storage) => {
+        const previous = await storage.get<TokenBucket>(ADMISSION_KEY);
+        const next = consumeToken(previous, ADMISSION_BUDGETS[kind], Date.now());
+        if (next.allowed) {
+          await storage.put(ADMISSION_KEY, next.bucket);
+          await storage.setAlarm(Date.now() + ADMISSION_TTL_MS);
+        }
+        return next;
+      });
+      return new Response(JSON.stringify(result.allowed ? { ok: true } : { error: "Too many room requests. Please try again shortly." }), {
+        status: result.allowed ? 200 : 429,
+        headers: { "Content-Type": "application/json", "Cache-Control": "no-store", ...(result.allowed ? {} : { "Retry-After": String(result.retryAfter) }) },
+      });
+    }
+
     if (request.method === "GET" && url.pathname === "/internal/health") {
       return jsonResponse({ ok: true, service: "game-room" });
     }
@@ -195,6 +204,16 @@ export class GameRoom {
   }
 
   async webSocketMessage(socket: WebSocket, rawMessage: string | ArrayBuffer): Promise<void> {
+    if (socket.readyState >= 2) return;
+    const attachment = this.readAttachment(socket);
+    const budget = consumeToken(attachment.commandBudget, COMMAND_BUDGET, Date.now());
+    if (!budget.allowed) {
+      this.sendError(socket, "RATE_LIMITED", "Too many commands. Please reconnect shortly.");
+      this.closeSocket(socket, 4429, "Command rate exceeded");
+      return;
+    }
+    attachment.commandBudget = budget.bucket;
+    socket.serializeAttachment(attachment);
     if (typeof rawMessage !== "string") {
       this.sendError(socket, "UNSUPPORTED_MESSAGE", "Only JSON text messages are accepted.");
       this.closeSocket(socket, 4400, "JSON text required");
@@ -216,7 +235,6 @@ export class GameRoom {
       return;
     }
 
-    const attachment = this.readAttachment(socket);
     if (!attachment.joined) {
       if (!isJoinMessage(parsed)) {
         this.sendError(socket, "JOIN_REQUIRED", "The first message must be a valid join message.");
@@ -254,7 +272,10 @@ export class GameRoom {
   async alarm(): Promise<void> {
     const now = Date.now();
     this.closeExpiredPendingSockets(now);
-    if (!this.engine) return;
+    if (!this.engine) {
+      await this.ctx.storage.delete(ADMISSION_KEY);
+      return;
+    }
 
     if (now >= this.lastActivityAt + ROOM_IDLE_TTL_MS) {
       await this.retireRoom("ROOM_EXPIRED", "This room expired after being idle.", "Room expired");
@@ -389,9 +410,9 @@ export class GameRoom {
     const attachment: SocketAttachment = {
       joined: true,
       sessionId: message.sessionId,
-      playerId: result.playerId,
       lastSequence: this.lastSequenceBySession[message.sessionId] ?? -1,
       connectedAt: this.readAttachment(socket).connectedAt,
+      commandBudget: this.readAttachment(socket).commandBudget,
     };
     socket.serializeAttachment(attachment);
 
@@ -403,7 +424,7 @@ export class GameRoom {
       v: GAME_PROTOCOL_VERSION,
       type: "welcome",
       reconnectToken: result.reconnectToken,
-      snapshot: result.snapshot,
+      snapshot: this.withSequence(result.snapshot, attachment),
     };
     this.safeSend(socket, welcome);
     this.broadcastEvents(result.events, result.revision, now, socket);
@@ -450,7 +471,7 @@ export class GameRoom {
       this.safeSend(socket, {
         v: GAME_PROTOCOL_VERSION,
         type: "snapshot",
-        snapshot: this.engine.snapshot(now, attachment.sessionId),
+        snapshot: this.withSequence(this.engine.snapshot(now, attachment.sessionId), attachment),
       });
       this.acknowledge(socket, message, this.engine.snapshot(now, attachment.sessionId).revision);
       return;
@@ -488,6 +509,11 @@ export class GameRoom {
       return;
     }
     if (!result.ok) {
+      // Rejected commands are processed too. Persist the watermark with the
+      // resulting state so a reconnect cannot replay an already rejected input.
+      attachment.lastSequence = message.sequence;
+      socket.serializeAttachment(attachment);
+      this.lastSequenceBySession[attachment.sessionId] = message.sequence;
       await this.persist();
       await this.scheduleNextAlarm();
       this.broadcastMutation(result, now);
@@ -637,11 +663,12 @@ export class GameRoom {
     now: number,
     excludedSocket?: WebSocket,
   ) {
-    for (const event of events) {
+    for (const [eventIndex, event] of events.entries()) {
       const message: ServerMessage = {
         v: GAME_PROTOCOL_VERSION,
         type: "event",
         revision,
+        eventIndex,
         serverTime: now,
         event,
       };
@@ -657,7 +684,7 @@ export class GameRoom {
       this.safeSend(socket, {
         v: GAME_PROTOCOL_VERSION,
         type: "snapshot",
-        snapshot: this.engine.snapshot(now, attachment.sessionId),
+        snapshot: this.withSequence(this.engine.snapshot(now, attachment.sessionId), attachment),
       });
     }
   }
@@ -667,6 +694,14 @@ export class GameRoom {
       if (socket === excludedSocket) return false;
       return this.readAttachment(socket).joined;
     });
+  }
+
+  private withSequence(snapshot: RoomSnapshot, attachment: SocketAttachment): RoomSnapshot {
+    return {
+      ...snapshot,
+      lastProcessedSequence: Math.max(attachment.lastSequence,
+        attachment.sessionId ? this.lastSequenceBySession[attachment.sessionId] ?? -1 : -1),
+    };
   }
 
   private acknowledge(socket: WebSocket, message: CommandMessage, revision: number) {
@@ -727,8 +762,12 @@ export class GameRoom {
     return {
       joined: value.joined === true,
       sessionId: typeof value.sessionId === "string" ? value.sessionId : null,
-      playerId: typeof value.playerId === "string" ? value.playerId : null,
       lastSequence: Number.isSafeInteger(value.lastSequence) ? Number(value.lastSequence) : -1,
+      commandBudget: isRecord(value.commandBudget)
+        && typeof value.commandBudget.tokens === "number" && Number.isFinite(value.commandBudget.tokens)
+        && typeof value.commandBudget.updatedAt === "number" && Number.isFinite(value.commandBudget.updatedAt)
+        ? { tokens: value.commandBudget.tokens, updatedAt: value.commandBudget.updatedAt }
+        : undefined,
       connectedAt:
         typeof value.connectedAt === "number" && Number.isFinite(value.connectedAt)
           ? value.connectedAt

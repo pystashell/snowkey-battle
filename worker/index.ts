@@ -6,6 +6,7 @@ import {
   isRoomCode,
 } from "../shared/game-protocol";
 import { GameRoom } from "./GameRoom";
+import { checkAdmission } from "./rate-limit";
 
 export { GameRoom };
 
@@ -109,10 +110,25 @@ async function createRoom(request: Request, env: Env) {
     return jsonResponse({ error: "Request body is too large" }, 413);
   }
 
-  const rawBody = await request.text();
-  if (new TextEncoder().encode(rawBody).byteLength > MAX_CREATE_BODY_BYTES) {
-    return jsonResponse({ error: "Request body is too large" }, 413);
+  const reader = request.body?.getReader();
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+  if (reader) {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      size += value.byteLength;
+      if (size > MAX_CREATE_BODY_BYTES) {
+        await reader.cancel();
+        return jsonResponse({ error: "Request body is too large" }, 413);
+      }
+      chunks.push(value);
+    }
   }
+  const bytes = new Uint8Array(size);
+  let offset = 0;
+  for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.byteLength; }
+  const rawBody = new TextDecoder().decode(bytes);
 
   let value: unknown;
   try {
@@ -178,6 +194,8 @@ const worker = {
         return new Response(null, { status: 405, headers: { Allow: "POST" } });
       }
       if (!hasAllowedOrigin(request)) return jsonResponse({ error: "Origin not allowed" }, 403);
+      const admission = await checkAdmission(request, env, "create");
+      if (!admission.ok) return admission;
       return createRoom(request, env);
     }
 
@@ -189,6 +207,8 @@ const worker = {
         return jsonResponse({ error: "Expected WebSocket upgrade" }, 426);
       }
       if (!hasAllowedOrigin(request)) return jsonResponse({ error: "Origin not allowed" }, 403);
+      const admission = await checkAdmission(request, env, "join");
+      if (!admission.ok) return admission;
       return env.GAME_ROOMS.getByName(roomCode).fetch(request);
     }
 

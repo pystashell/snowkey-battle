@@ -1,6 +1,54 @@
 # SnowKey Battle project context
 
-Last handoff update: 2026-07-29
+Last handoff update: 2026-10-01
+
+## Audit corrections verified locally on 2026-10-01 (Asia/Shanghai)
+
+The referenced audit reviewed `ec33823`; this checkout started at `0cb421c`.
+The audit PR targets `codex/release-v1.0.0` (`0cb421c`) so that the existing
+release preparation stays outside its diff. No production deployment was performed.
+
+| Audit item | Reproduction and correction |
+| --- | --- |
+| Stale shared prefix | Before-fix engine test retained `s` after both `snow` and `star` were claimed. Claim and expiry now share input reconciliation; `r` can immediately start `river`. |
+| Hidden rejected prediction | Two real browser clients delayed a final letter until an opposing Super Snowflake froze its sender. The server rejected it and the word returned to the screen. Predictions now retain command IDs and sequences and settle against the snapshot's processed-command watermark; earlier snapshots keep later predictions. |
+| Invalid command/configuration | Before-fix engine test accepted `constructor` as a wordbook. Enums now require own keys; a shared operation-specific validator rejects malformed WebSocket arguments before engine work, persistence or broadcasting. |
+| Reconnect sequence reset | A real React hook with blocked storage sent sequence 1 after previously sending 50. Same-session reconnect now preserves the maximum in-memory/persisted sequence; welcome additionally reconciles the server watermark. |
+| Half-open connection | The original hook stayed connected after 46 seconds with no received frames. A 45-second receive watchdog (15 seconds for initial welcome) now starts backoff without waiting for a close event. |
+| System text input/IME | Text input is the letter entry point; composition commits once, physical keydown does not duplicate it, and compact-keyboard pointer input still reaches the server. Browser emulation and DOM composition tests passed; physical mobile IME devices were not tested. |
+| Request/command budgets | Creation/join admission is checked before room allocation/routing. Durable budgets use the existing namespace and hashed address keys, expire after 10 idle minutes, and retain no raw IP in storage. Socket budgets survive hibernation in attachments. Origin checks remain first. |
+| Consecutive events | The original hook lost the first of two different-revision events delivered in one React batch. A consumed event queue now preserves both. This checkout's engine already defers multiple events; same-revision/index testing is additional protocol hardening, not a proven current-engine emission bug. |
+| Reconnect animation | A real guest browser reloaded after a snowball had launched, recovered the pending attack from welcome, rendered the elapsed flight with negative animation delay, and received its impact. Server times are used without adding a new local actor queue. |
+
+Word pools are cached lazily per book and engine instance without changing bags,
+history or serialization. The redundant socket `playerId` attachment was removed.
+The larger suggestions to split full-state persistence, consolidate all local-mode
+rules, and decompose the whole game component remain separate architecture work;
+acknowledged-state durability was preserved. Existing starter D1 scaffolding was
+already removed by the baseline release work; no unrelated deletion was made.
+
+Validation: the full `npm test` chain passed 95 tests including typecheck and
+production build; the subsequently added consecutive-revision regression also
+passed (`npm run test:network`: 17/17), bringing the suite to 96 tests. Lint passed.
+`npm run test:live` targeted **http://127.0.0.1:3000**: gameplay/host-transfer/kick
+checks passed and abrupt disconnect reclaimed the room after about 68 seconds.
+Two isolated Chromium profiles completed a real 1v1 match with matching winner
+and health. Evidence: `test-results/audit-browser.json` plus four screenshots;
+the browser test is reproducible through `tests/browser-audit.mjs`. The in-app
+browser runtime could not start because Windows sandbox ACL initialization failed,
+so the test used a separate headless Chromium process. A GitHub Actions workflow
+is included to run the automated test/build/typecheck chain and lint on PRs.
+
+Known observations outside the supplied audit's correctness fixes:
+
+- Local preview metadata still resolves the favicon to the production origin,
+  which the existing same-origin image CSP blocks. The browser test records this
+  exact warning separately; it found no other console errors.
+- A fresh `npm audit --omit=dev --omit=optional` reports 3 existing dependency
+  findings (Next: critical; nanoid: high; baseline-browser-mapping: moderate).
+  These package versions were not changed by this repair. This is a dependency
+  scanner result, not proof the advisory paths are reachable in the vinext Worker.
+  The older release audit below is historical and must not be described as current.
 
 ## v1.0.0 release candidate
 

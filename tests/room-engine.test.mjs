@@ -62,6 +62,42 @@ function typeWord(engine, sessionId, word, now) {
   return result;
 }
 
+test("claiming the last shared-prefix candidate clears stale typing", () => {
+  const engine = createEngine();
+  join(engine, 1);
+  const now = start(engine, ["guest-1"]);
+  const saved = engine.serialize();
+  saved.state.words = [];
+  saved.state.nextSpawnAt = null;
+  const room = RoomEngine.restore(saved, { random: () => 0.5 });
+  for (const word of ["snow", "star", "river"]) room.spawnWord(now, word);
+  room.handleCommand(HOST_SESSION, { op: "type.key", key: "s" }, now);
+  assert.deepEqual(room.snapshot(now).typingByPlayer["pine-0"], { buffer: "s", targetWordId: null });
+  typeWord(room, "guest-1", "snow", now);
+  assert.equal(room.snapshot(now).typingByPlayer["pine-0"].buffer, "s");
+  typeWord(room, "guest-1", "star", now);
+  assert.deepEqual(room.snapshot(now).typingByPlayer["pine-0"], { buffer: "", targetWordId: null });
+  const result = room.handleCommand(HOST_SESSION, { op: "type.key", key: "r" }, now);
+  assert.equal(result.events.some((event) => event.type === "typing.rejected"), false);
+  assert.equal(room.snapshot(now).typingByPlayer["pine-0"].buffer, "r");
+});
+
+test("configuration enums reject inherited object properties without changing state", () => {
+  for (const value of ["constructor", "toString", "__proto__"]) {
+    for (const command of [
+      { op: "lobby.set_config", config: { wordbookId: value } },
+      { op: "lobby.set_config", config: { snowfallLevel: value } },
+      { op: "lobby.set_ai_level", playerId: "pine-1", level: value },
+    ]) {
+      const engine = createEngine();
+      const before = engine.serialize();
+      const result = engine.handleCommand(HOST_SESSION, command, 0);
+      assert.equal(result.ok, false, JSON.stringify(command));
+      assert.deepEqual(engine.serialize(), before);
+    }
+  }
+});
+
 test("creates a six-character room with eight stable seats and admits at most eight humans", () => {
   const engine = createEngine();
   assert.equal(engine.snapshot(0).config.wordbookId, "cet4");
