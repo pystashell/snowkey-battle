@@ -36,7 +36,10 @@ async function client(name) {
     server.onMessage((raw) => {
       const message = JSON.parse(String(raw));
       state.messages.push(message);
-      if (message.snapshot) state.snapshot = message.snapshot;
+      if (message.snapshot) {
+        state.snapshot = message.snapshot;
+        if (message.snapshot.phase === "playing") state.lastPlayingSnapshot = message.snapshot;
+      }
       // Release a real final keystroke only after the real server frost impact.
       if (state.held && message.event?.type === "attack.resolved" && message.event.kind === "frost") {
         server.send(state.held);
@@ -118,6 +121,12 @@ try {
   await guest.page.screenshot({ path: "test-results/audit-mobile-keyboard.png", fullPage: true });
   evidence.checks.push("mobile compact keyboard claims a word through the real server");
 
+  // Make first-round accuracy observably imperfect before checking the rematch.
+  await hostInput.press("Escape");
+  const wrongInitial = [..."abcdefghijklmnopqrstuvwxyz"].find((letter) => !host.snapshot.words.some((word) => word.text.startsWith(letter)));
+  assert.ok(wrongInitial);
+  await hostInput.fill(wrongInitial.repeat(10));
+
   // Finish a real 1v1 match; the two browsers must agree on health and winner.
   const deadline = Date.now() + 70_000;
   while (Date.now() < deadline && host.snapshot.phase === "playing") {
@@ -134,6 +143,33 @@ try {
   evidence.winner = host.snapshot.winner;
   evidence.health = host.snapshot.players.map((player) => ({ id: player.id, health: player.health }));
   await host.page.screenshot({ path: "test-results/audit-match-ended.png", fullPage: true });
+  const accuracy = () => host.page.locator(".stat-card--right strong").innerText();
+  const previousAccuracy = await accuracy();
+  assert.notEqual(previousAccuracy, "100%");
+  const previousStart = host.snapshot.startedAt;
+  const queuedBeforeEnd = host.lastPlayingSnapshot.pendingAttacks.filter((item) => item.throwAt > host.lastPlayingSnapshot.serverTime).length;
+  assert.ok(queuedBeforeEnd > 0, "the finished match had unthrown attacks to cancel");
+  await host.page.getByRole("button", { name: "Return to Room Lobby", exact: true }).click();
+  await until(() => host.snapshot.phase === "lobby" && guest.snapshot.phase === "lobby", "both clients return to lobby");
+  await guest.page.getByRole("button", { name: "I'm Ready", exact: true }).click();
+  await host.page.getByRole("button", { name: /Host Starts Match/ }).click();
+  await until(() => host.snapshot.phase === "countdown", "rematch countdown");
+  const countdownDeadline = Date.now() + 6000;
+  while (host.snapshot.phase === "countdown" && Date.now() < countdownDeadline) {
+    assert.equal(await host.page.locator(".catch-effect, .projectile").count(), 0, "no old animation during countdown");
+    await sleep(50);
+  }
+  await until(() => host.snapshot.phase === "playing" && guest.snapshot.phase === "playing", "both clients rematch");
+  assert.notEqual(host.snapshot.startedAt, previousStart);
+  assert.equal(await accuracy(), "100%");
+  const rematchWord = host.snapshot.words.find((word) => word.kind === "normal");
+  await hostInput.fill(rematchWord.text);
+  await until(() => host.snapshot.pendingAttacks.some((item) => item.attackerId === host.snapshot.selfPlayerId), "new round claim");
+  await until(async () => await host.page.locator(".projectile").count() === 1, "new round throws without old queue delay", 3000);
+  await until(() => guest.snapshot.players.find((player) => player.id === guest.snapshot.selfPlayerId).health < 100, "new round impact");
+  evidence.rematch = { queuedBeforeEnd, previousAccuracy, accuracyAtStart: "100%", recoveredThrow: true };
+  evidence.checks.push("online rematch clears queued effects, resets accuracy, and throws on the new server timeline");
+  await host.page.screenshot({ path: "test-results/audit-rematch.png", fullPage: true });
   // Existing canonical metadata points local preview favicons at the production
   // origin; the existing same-origin CSP blocks that icon. Keep it in evidence.
   const knownPreviewWarning = (message) => message.includes("Loading the image 'https://snow-fighting-game.pystashell.workers.dev/favicon.svg' violates the following Content Security Policy directive:");

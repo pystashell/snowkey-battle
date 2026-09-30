@@ -4,6 +4,7 @@ import ts from "typescript";
 
 // Exercise source modules (including real React hooks), without a production build.
 export function resolve(specifier, context, nextResolve) {
+    if (specifier === "next/link") return nextResolve("next/link.js", context);
     if (specifier === "vinext/server/app-router-entry") {
       return { url: "data:text/javascript,export default {fetch: async () => new Response('page')}", shortCircuit: true };
     }

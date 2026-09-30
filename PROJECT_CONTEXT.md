@@ -2,6 +2,41 @@
 
 Last handoff update: 2026-10-01
 
+## Follow-up review evidence checked on 2026-10-01 (Asia/Shanghai)
+
+The supplied `snowkey-review-evidence.zip` (SHA-256
+`842883dadf44a0bc6ac00caa2d2b793a8516f53ffdec0cb1d765ac000ba89ce0`)
+describes the earlier release archive. Its defect assertions were read as
+evidence, then checked against PR #1's repair commit `0d6bfd9`; the attached
+script was not used as a passing correctness suite.
+
+| Finding | Current verification and correction |
+| --- | --- |
+| A: runtime validation | Own-key enum validation already rejects inherited names. An added non-host regression sends `{key: {toString: null}}` through the real Worker handler during play: no throw, engine mutation, storage write, or peer broadcast. |
+| B: rejected prediction | Existing prediction regressions and the repeated real-browser frost race pass: the rejected hidden word returns after authoritative processing. |
+| C: reconnect and heartbeat | Existing mounted-hook tests pass with blocked storage, server watermark reconciliation, and a silent open connection exceeding the receive deadline. |
+| D: rematch lifecycle | Three new mounted-game regressions failed before this follow-up: old effects reappeared in countdown, accuracy stayed at 50% in the next round, and stale callbacks/events survived a missed lobby transition. Cleanup now uses room/self/start-time identity and setup transitions, invalidates old timer callbacks, resets both key counters, and rejects earlier-round events. Same-round snapshots and welcome messages preserve statistics. The old 14.8-second extra client queue had already been removed by the first repair. |
+| E: system keyboard | Existing DOM composition/deduplication tests and browser physical/text-only/compact input checks pass. Paste remains disabled by the game input. No physical mobile IME device was tested. |
+| F: amplification | Repeating the supplied 200-cancel scenario with a fixed clock accepts 80 commands, persists 80 watermarks, sends 80 peer snapshots, then closes the socket with 4429 before further work. Admission and hibernation-budget regressions pass. These are mock operation counts, not production throughput, costs, or an eight-player load test. |
+
+The follow-up changes client lifecycle handling and adds regression coverage;
+it does not change authoritative battle rules or deployment configuration.
+Accepted commands still durably persist full state and broadcast full snapshots.
+Per-room budgets, incremental snapshots, persistence batching, and sustained
+eight-player staging measurements remain separate performance work; this review
+does not claim those optimizations or production capacity are complete.
+
+Validation: the full `npm test` chain passed 101 tests, typecheck, and production
+build; lint passed without warnings. Two isolated Chromium profiles against
+**http://127.0.0.1:3000** repeated
+the rejection/reconnect/mobile/full-match checks and immediately rematched after
+an ending with six unthrown attacks. No old effect appeared during countdown;
+accuracy changed from 90% to 100%, and the next round's first throw hit normally.
+The browser recorded no application errors and the same known favicon warning.
+Evidence: ignored `test-results/review-rematch-before.log`,
+`review-network-after.log`, `review-full-test.log`, `audit-browser.json`, and
+`audit-rematch.png`. No production deployment was performed.
+
 ## Audit corrections verified locally on 2026-10-01 (Asia/Shanghai)
 
 The referenced audit reviewed `ec33823`; this checkout started at `0cb421c`.

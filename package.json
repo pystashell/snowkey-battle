@@ -11,7 +11,7 @@
     "start": "wrangler dev --config dist/server/wrangler.json",
     "preview": "npm run build && npm run start",
     "test": "npm run test:audio && npm run test:mobile-keyboard && npm run test:layout && npm run test:network && npm run typecheck && npm run build && node --experimental-strip-types --test tests/language.test.mjs && node --test tests/rendered-html.test.mjs && npm run test:word-pools && npm run test:engine",
-    "test:network": "node --import ./tests/helpers/register-loader.mjs --test tests/room-socket.test.mjs tests/worker-room.test.mjs tests/online-typing.test.mjs tests/typing-input.test.mjs",
+    "test:network": "node --import ./tests/helpers/register-loader.mjs --test tests/room-socket.test.mjs tests/worker-room.test.mjs tests/online-typing.test.mjs tests/typing-input.test.mjs tests/online-rematch.test.mjs",
     "test:audio": "node --experimental-strip-types --test tests/game-audio.test.mjs",
     "test:mobile-keyboard": "node --experimental-strip-types --test tests/mobile-keyboard.test.mjs",
     "test:layout": "node --test tests/responsive-layout.test.mjs",

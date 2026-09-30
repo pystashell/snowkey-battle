@@ -103,6 +103,55 @@ test("processed sequence is persisted and included in reconnect welcome and snap
   assert.equal(next.sent.findLast((message) => message.type === "snapshot").snapshot.config.pineSize, 2);
 });
 
+test("a joined non-host cannot make malformed typing escape the WebSocket handler", async (t) => {
+  t.mock.timers.enable({ apis: ["Date"], now: 100_000 });
+  const { room, socket: host, sockets, storage } = await joined();
+  const guest = new Socket();
+  sockets.push(guest);
+  await room.webSocketMessage(guest, JSON.stringify({ v: 1, type: "join", ...identity, sessionId: "guest-session", name: "Bob" }));
+  await room.webSocketMessage(guest, JSON.stringify(command({ op: "presence.ready", ready: true })));
+  await room.webSocketMessage(host, JSON.stringify(command({ op: "match.start" })));
+  t.mock.timers.tick(3000);
+  await room.alarm();
+  const writes = storage.writes;
+  const before = room.engine.serialize();
+  host.sent = [];
+  await assert.doesNotReject(() => room.webSocketMessage(guest, JSON.stringify(command({ op: "type.key", key: { toString: null } }, 2))));
+  assert.equal(guest.sent.at(-1).code, "INVALID_COMMAND");
+  assert.equal(storage.writes, writes);
+  assert.deepEqual(room.engine.serialize(), before);
+  assert.equal(host.sent.length, 0);
+});
+
+test("the review's 200-cancel burst stops storage and fan-out at the socket budget", async (t) => {
+  t.mock.timers.enable({ apis: ["Date"], now: 100_000 });
+  const { room, socket: host, sockets, storage } = await joined();
+  const guest = new Socket();
+  sockets.push(guest);
+  await room.webSocketMessage(guest, JSON.stringify({ v: 1, type: "join", ...identity, sessionId: "guest-session", name: "Bob" }));
+  await room.webSocketMessage(guest, JSON.stringify(command({ op: "presence.ready", ready: true })));
+  await room.webSocketMessage(host, JSON.stringify(command({ op: "match.start" })));
+  t.mock.timers.tick(3000);
+  await room.alarm();
+  const writes = storage.writes;
+  const available = COMMAND_BUDGET.burst; // The countdown fully refilled the bucket.
+  host.sent = [];
+  guest.sent = [];
+  for (let sequence = 2; sequence < 202; sequence++) {
+    await room.webSocketMessage(guest, JSON.stringify(command({ op: "type.cancel" }, sequence)));
+  }
+  const accepted = guest.sent.filter((message) => message.type === "ack");
+  const snapshots = host.sent.filter((message) => message.type === "snapshot").length;
+  assert.equal(accepted.length, available);
+  assert.equal(storage.writes - writes, available);
+  assert.equal(snapshots, available);
+  assert.equal(guest.closeCode, 4429);
+  assert.equal(guest.sent.at(-1).code, "RATE_LIMITED");
+  assert.equal(storage.data.get("room").lastSequenceBySession["guest-session"], accepted.at(-1).sequence);
+  t.diagnostic(JSON.stringify({ commands: 200, accepted: accepted.length, storageWrites: storage.writes - writes,
+    peerSnapshots: snapshots, note: "Fixed-clock runtime mock, not production throughput or billing." }));
+});
+
 test("command flood is refused before repeated persistence, and budget survives hibernation", async (t) => {
   t.mock.timers.enable({ apis: ["Date"], now: 100_000 });
   const { room, socket, storage } = await joined();

@@ -89,7 +89,8 @@ test/build/typecheck chain and lint on pull requests and pushes to `main`.
 
 `npm run test:browser` exercises two isolated browsers against an explicitly
 selected `SNOW_BATTLE_URL`, including a real frost rejection, recovery during an
-in-flight throw, the compact keyboard, and a complete match. It requires an
+in-flight throw, the compact keyboard, a complete match, and an online rematch
+with cleared animation queues and reset input statistics. It requires an
 available Playwright installation; set `SNOW_PLAYWRIGHT_MODULE` to its `index.mjs`
 file URL if it is outside this repository, and optionally `SNOW_BROWSER_PATH` to
 a Chromium executable. Screenshots and the result go to ignored `test-results/`.

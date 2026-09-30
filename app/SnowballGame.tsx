@@ -867,11 +867,13 @@ export default function SnowballGame() {
   const lockedWordsRef = useRef(new Set<number>());
   const onlineTypingRef = useRef(new OnlineTyping());
   const timersRef = useRef<ManagedTimer[]>([]);
+  const timerGenerationRef = useRef(0);
   const actorAvailableAtRef = useRef<Record<string, number>>({});
   const pausedAtRef = useRef(0);
   const inviteHandledRef = useRef(false);
   const handledRoomEventRef = useRef(0);
   const onlinePhaseRef = useRef<RoomSnapshot["phase"] | null>(null);
+  const onlineMatchRef = useRef<Pick<RoomSnapshot, "code" | "startedAt" | "phase" | "selfPlayerId"> | null>(null);
   const eliminatedPlayerIdsRef = useRef(new Set<string>());
   const fallingPlayerIdsRef = useRef(new Set<string>());
   const fallenPlayerIdsRef = useRef(new Set<string>());
@@ -1168,8 +1170,52 @@ export default function SnowballGame() {
     if (room.error?.id) onlineTypingRef.current.reject(room.error.id);
   }, [room.error]);
 
+  const clearPendingTimers = useCallback(() => {
+    ++timerGenerationRef.current;
+    timersRef.current.forEach((timer) => window.clearTimeout(timer.id));
+    timersRef.current = [];
+  }, []);
+
   useEffect(() => {
-    if (!isOnline || !onlineSnapshot) return;
+    if (!isOnline || !onlineSnapshot) {
+      onlineMatchRef.current = null;
+      return;
+    }
+    const previousMatch = onlineMatchRef.current;
+    const newMatch = !previousMatch
+      || previousMatch.code !== onlineSnapshot.code
+      || previousMatch.selfPlayerId !== onlineSnapshot.selfPlayerId
+      || previousMatch.startedAt !== onlineSnapshot.startedAt;
+    const enteringSetup = previousMatch?.phase !== onlineSnapshot.phase
+      && (onlineSnapshot.phase === "lobby" || onlineSnapshot.phase === "countdown");
+    if (newMatch || enteringSetup) {
+      // A reconnect can skip lobby/countdown entirely. The server's start time
+      // identifies the round; ordinary snapshots within a round keep its stats.
+      clearPendingTimers();
+      actorAvailableAtRef.current = {};
+      onlineTypingRef.current.clear();
+      animatedRoomAttacksRef.current.clear();
+      playedRoomAudioEventsRef.current.clear();
+      eliminatedPlayerIdsRef.current.clear();
+      fallingPlayerIdsRef.current.clear();
+      fallenPlayerIdsRef.current.clear();
+      lockedWordsRef.current.clear();
+      onlinePhaseRef.current = null;
+      gameStartedAtRef.current = 0;
+      lastClaimRef.current = 0;
+      pausedAtRef.current = 0;
+      setProjectiles([]);
+      setCatchEffects([]);
+      setCharacterActions(createIdleActions());
+      setCorrectKeys(0);
+      setWrongKeys(0);
+      setElapsed(0);
+      setInputError(false);
+    }
+    onlineMatchRef.current = {
+      code: onlineSnapshot.code, startedAt: onlineSnapshot.startedAt,
+      phase: onlineSnapshot.phase, selfPlayerId: onlineSnapshot.selfPlayerId,
+    };
     const now = Date.now();
     const mappedPlayers = onlineSnapshot.players.map((player) =>
       mapRoomPlayer(player, onlineSnapshot.selfPlayerId, onlineServerTimeOffsetMs));
@@ -1279,6 +1325,7 @@ export default function SnowballGame() {
       ));
     }
   }, [
+    clearPendingTimers,
     getOnlineServerNow,
     isOnline,
     lockTargetWord,
@@ -1301,15 +1348,18 @@ export default function SnowballGame() {
 
   const scheduleTimer = useCallback((callback: () => void, delay: number) => {
     const remaining = Math.max(0, delay);
+    const generation = timerGenerationRef.current;
     const timer: ManagedTimer = {
       id: 0,
       dueAt: Date.now() + remaining,
       remaining,
-      callback,
+      callback: () => {
+        if (generation === timerGenerationRef.current) callback();
+      },
     };
     timer.id = window.setTimeout(() => {
       timersRef.current = timersRef.current.filter((candidate) => candidate !== timer);
-      callback();
+      timer.callback();
     }, remaining);
     timersRef.current.push(timer);
     return timer.id;
@@ -1332,11 +1382,6 @@ export default function SnowballGame() {
         timer.callback();
       }, timer.remaining);
     });
-  }, []);
-
-  const clearPendingTimers = useCallback(() => {
-    timersRef.current.forEach((timer) => window.clearTimeout(timer.id));
-    timersRef.current = [];
   }, []);
 
   const say = useCallback(
@@ -1644,7 +1689,7 @@ export default function SnowballGame() {
         Boolean(
           attacker
           && attacker.health > 0
-          && stageRef.current !== "ended"
+          && stageRef.current === "playing"
           && !eliminatedPlayerIdsRef.current.has(attacker.id),
         );
 
@@ -1888,7 +1933,7 @@ export default function SnowballGame() {
         if (event.reason === "FROZEN") {
           setAnnouncement(textNow("❄ 你被冻结了，1 秒后继续输入", "❄ You are frozen. Resume typing in 1 second"));
         }
-        window.setTimeout(() => setInputError(false), 260);
+        scheduleTimer(() => setInputError(false), 260);
         return;
       }
       if (event.type === "attack.resolved") {
@@ -1953,6 +1998,11 @@ export default function SnowballGame() {
     for (const delivery of roomEvents) {
       if (delivery.id <= handledRoomEventRef.current) continue;
       handledRoomEventRef.current = delivery.id;
+      // React may batch a previous round's event with the new round's snapshot.
+      if (onlineSnapshot.startedAt === null
+        || delivery.serverTime < onlineSnapshot.startedAt
+        || (onlineSnapshot.phase !== "playing" && onlineSnapshot.phase !== "ended")) continue;
+      if (delivery.event.type === "word.claimed" && onlineSnapshot.phase !== "playing") continue;
       handleEvent(delivery.event);
     }
     consumeRoomEvents(handledRoomEventRef.current);
@@ -2299,10 +2349,8 @@ export default function SnowballGame() {
   }, [isOnline, pausePendingTimers, setGameStage, textNow]);
 
   useEffect(
-    () => () => {
-      timersRef.current.forEach((timer) => window.clearTimeout(timer.id));
-    },
-    [],
+    () => clearPendingTimers,
+    [clearPendingTimers],
   );
 
   const applyLocalInputValue = (rawValue: string) => {
