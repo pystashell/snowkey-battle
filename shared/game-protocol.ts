@@ -90,6 +90,8 @@ export type RoomSnapshot = {
   protocolVersion: typeof GAME_PROTOCOL_VERSION;
   code: string;
   revision: number;
+  /** This session's processed command watermark, attached by the room service. */
+  lastProcessedSequence?: number;
   serverTime: number;
   phase: RoomPhase;
   config: RoomConfig;
@@ -187,6 +189,7 @@ export type ServerMessage =
       v: typeof GAME_PROTOCOL_VERSION;
       type: "event";
       revision: number;
+      eventIndex?: number;
       serverTime: number;
       event: RoomEvent;
     }

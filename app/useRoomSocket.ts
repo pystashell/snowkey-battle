@@ -22,6 +22,8 @@ const STORAGE_PREFIX = "snow-type-battle.room.v1";
 const LAST_ROOM_KEY = `${STORAGE_PREFIX}.last`;
 const RECONNECT_DELAYS = [500, 1_000, 2_000, 4_000, 7_500, 10_000] as const;
 const PING_INTERVAL_MS = 15_000;
+const RECEIVE_TIMEOUT_MS = 45_000;
+const WELCOME_TIMEOUT_MS = 15_000;
 
 export type RoomConnectionStatus =
   | "idle"
@@ -35,6 +37,7 @@ export type RoomConnectionStatus =
 export type RoomSocketError = {
   code: string;
   message: string;
+  id?: string;
 };
 
 export type SentRoomCommand = {
@@ -50,6 +53,8 @@ export type RoomEventMeta = {
   revision: number;
   serverTime: number;
 };
+
+export type RoomEventDelivery = RoomEventMeta & { id: number; event: RoomEvent };
 
 export type UseRoomSocketOptions = {
   autoResume?: boolean;
@@ -174,7 +179,7 @@ export function useRoomSocket(options: UseRoomSocketOptions = {}) {
   const [status, setStatus] = useState<RoomConnectionStatus>("idle");
   const [roomCode, setRoomCode] = useState<string | null>(null);
   const [snapshot, setSnapshot] = useState<RoomSnapshot | null>(null);
-  const [lastEvent, setLastEvent] = useState<RoomEvent | null>(null);
+  const [events, setEvents] = useState<RoomEventDelivery[]>([]);
   const [lastAck, setLastAck] = useState<RoomCommandAck | null>(null);
   const [error, setError] = useState<RoomSocketError | null>(null);
   const [serverTimeOffsetMs, setServerTimeOffsetMs] = useState(0);
@@ -186,6 +191,11 @@ export function useRoomSocket(options: UseRoomSocketOptions = {}) {
   const reconnectAttemptRef = useRef(0);
   const connectionGenerationRef = useRef(0);
   const sequenceRef = useRef(0);
+  const sequenceSessionRef = useRef<string | null>(null);
+  const lastReceivedAtRef = useRef(0);
+  const lastPingAtRef = useRef(0);
+  const eventIdRef = useRef(0);
+  const eventKeysRef = useRef(new Set<string>());
   const lastRevisionRef = useRef(0);
   const lastEventRevisionRef = useRef(0);
   const serverTimeOffsetRef = useRef(0);
@@ -250,24 +260,57 @@ export function useRoomSocket(options: UseRoomSocketOptions = {}) {
     return { id: message.id, sequence: message.sequence } satisfies SentRoomCommand;
   }, []);
 
+  const scheduleReconnect = useCallback(() => {
+    if (!mountedRef.current || intentionalCloseRef.current) return;
+    clearReconnectTimer();
+    clearPingTimer();
+    ++connectionGenerationRef.current;
+    welcomedRef.current = false;
+    const previous = socketRef.current;
+    socketRef.current = null;
+    if (previous && previous.readyState < WebSocket.CLOSING) previous.close(4000, "reconnecting");
+    setStatus("reconnecting");
+    const attempt = reconnectAttemptRef.current++;
+    const baseDelay = RECONNECT_DELAYS[Math.min(attempt, RECONNECT_DELAYS.length - 1)];
+    reconnectTimerRef.current = window.setTimeout(() => {
+      const credentials = credentialsRef.current;
+      if (credentials && mountedRef.current && !intentionalCloseRef.current) {
+        openSocketRef.current(credentials, true);
+      }
+    }, Math.round(baseDelay * (0.85 + Math.random() * 0.3)));
+  }, [clearPingTimer, clearReconnectTimer]);
+
   const schedulePing = useCallback(() => {
     clearPingTimer();
     pingTimerRef.current = window.setInterval(() => {
-      sendRawCommand({ op: "ping" });
-    }, PING_INTERVAL_MS);
-  }, [clearPingTimer, sendRawCommand]);
+      const now = Date.now();
+      const timeout = welcomedRef.current ? RECEIVE_TIMEOUT_MS : WELCOME_TIMEOUT_MS;
+      if (now - lastReceivedAtRef.current >= timeout) {
+        scheduleReconnect();
+      } else if (welcomedRef.current && now - lastPingAtRef.current >= PING_INTERVAL_MS) {
+        lastPingAtRef.current = now;
+        sendRawCommand({ op: "ping" });
+      }
+    }, 5_000);
+  }, [clearPingTimer, scheduleReconnect, sendRawCommand]);
 
   const handleMessage = useCallback((message: ServerMessage) => {
     if (message.type === "welcome") {
       const current = credentialsRef.current;
+      const serverSequence = message.snapshot.lastProcessedSequence;
+      if (Number.isSafeInteger(serverSequence) && serverSequence! >= 0) {
+        sequenceRef.current = Math.max(sequenceRef.current, serverSequence!);
+        if (current) saveSequence(current.sessionId, sequenceRef.current);
+      }
       if (current && message.reconnectToken !== current.reconnectToken) {
         persistCredentials({ ...current, reconnectToken: message.reconnectToken });
       }
       lastRevisionRef.current = message.snapshot.revision;
       lastEventRevisionRef.current = message.snapshot.revision;
+      eventKeysRef.current = new Set(["welcome"]);
       updateServerTime(message.snapshot.serverTime);
       setSnapshot(message.snapshot);
-      setLastEvent(null);
+      setEvents([]);
       setLastAck(null);
       setStatus("connected");
       setError(null);
@@ -288,11 +331,16 @@ export function useRoomSocket(options: UseRoomSocketOptions = {}) {
     }
 
     if (message.type === "event") {
-      if (message.revision <= lastEventRevisionRef.current) return;
+      if (message.revision < lastEventRevisionRef.current) return;
+      if (message.revision > lastEventRevisionRef.current) eventKeysRef.current.clear();
+      const eventKey = message.eventIndex === undefined ? JSON.stringify(message.event) : String(message.eventIndex);
+      if (eventKeysRef.current.has("welcome") || eventKeysRef.current.has(eventKey)) return;
+      eventKeysRef.current.add(eventKey);
       lastEventRevisionRef.current = message.revision;
       lastRevisionRef.current = Math.max(lastRevisionRef.current, message.revision);
       updateServerTime(message.serverTime);
-      setLastEvent(message.event);
+      const delivery = { id: ++eventIdRef.current, event: message.event, revision: message.revision, serverTime: message.serverTime };
+      setEvents((current) => [...current, delivery]);
       callbacksRef.current.onEvent?.(message.event, {
         revision: message.revision,
         serverTime: message.serverTime,
@@ -331,12 +379,12 @@ export function useRoomSocket(options: UseRoomSocketOptions = {}) {
         welcomedRef.current = false;
         setRoomCode(null);
         setSnapshot(null);
-        setLastEvent(null);
+        setEvents([]);
         setLastAck(null);
         reportError({ code: message.code, message: message.message }, true);
         return;
       }
-      reportError({ code: message.code, message: message.message });
+      reportError({ code: message.code, message: message.message, id: message.id });
     }
   }, [clearPingTimer, clearReconnectTimer, persistCredentials, reportError, schedulePing, updateServerTime]);
 
@@ -353,7 +401,11 @@ export function useRoomSocket(options: UseRoomSocketOptions = {}) {
     if (previousSocket && previousSocket.readyState < WebSocket.CLOSING) previousSocket.close(1000, "replaced");
 
     persistCredentials(credentials);
-    sequenceRef.current = readSequence(credentials.sessionId);
+    sequenceRef.current = Math.max(
+      sequenceSessionRef.current === credentials.sessionId ? sequenceRef.current : 0,
+      readSequence(credentials.sessionId),
+    );
+    sequenceSessionRef.current = credentials.sessionId;
     setRoomCode(credentials.roomCode);
     setStatus(reconnecting ? "reconnecting" : "connecting");
     setError(null);
@@ -366,6 +418,9 @@ export function useRoomSocket(options: UseRoomSocketOptions = {}) {
       return;
     }
     socketRef.current = socket;
+    lastReceivedAtRef.current = Date.now();
+    lastPingAtRef.current = Date.now();
+    schedulePing();
 
     socket.addEventListener("open", () => {
       if (generation !== connectionGenerationRef.current) return;
@@ -387,6 +442,7 @@ export function useRoomSocket(options: UseRoomSocketOptions = {}) {
           reportError({ code: "BAD_SERVER_MESSAGE", message: "房间服务器返回了无法识别的消息。" });
           return;
         }
+        lastReceivedAtRef.current = Date.now();
         handleMessage(parsed);
       } catch {
         reportError({ code: "BAD_SERVER_MESSAGE", message: "房间服务器消息解析失败。" });
@@ -410,19 +466,9 @@ export function useRoomSocket(options: UseRoomSocketOptions = {}) {
         return;
       }
 
-      setStatus("reconnecting");
-      const attempt = reconnectAttemptRef.current;
-      reconnectAttemptRef.current += 1;
-      const baseDelay = RECONNECT_DELAYS[Math.min(attempt, RECONNECT_DELAYS.length - 1)];
-      const jitteredDelay = Math.round(baseDelay * (0.85 + Math.random() * 0.3));
-      reconnectTimerRef.current = window.setTimeout(() => {
-        const latestCredentials = credentialsRef.current;
-        if (latestCredentials && mountedRef.current && !intentionalCloseRef.current) {
-          openSocketRef.current(latestCredentials, true);
-        }
-      }, jitteredDelay);
+      scheduleReconnect();
     });
-  }, [clearPingTimer, clearReconnectTimer, handleMessage, persistCredentials, reportError]);
+  }, [clearPingTimer, clearReconnectTimer, handleMessage, persistCredentials, reportError, schedulePing, scheduleReconnect]);
 
   useEffect(() => {
     openSocketRef.current = openSocket;
@@ -449,7 +495,7 @@ export function useRoomSocket(options: UseRoomSocketOptions = {}) {
     lastRevisionRef.current = 0;
     lastEventRevisionRef.current = 0;
     setSnapshot(null);
-    setLastEvent(null);
+    setEvents([]);
     setLastAck(null);
     openSocket(credentials, false);
     return true;
@@ -509,7 +555,7 @@ export function useRoomSocket(options: UseRoomSocketOptions = {}) {
       lastRevisionRef.current = 0;
       lastEventRevisionRef.current = 0;
       setSnapshot(null);
-      setLastEvent(null);
+      setEvents([]);
       setLastAck(null);
       openSocket(credentials, false);
       return normalizedCode;
@@ -549,7 +595,7 @@ export function useRoomSocket(options: UseRoomSocketOptions = {}) {
     reconnectAttemptRef.current = 0;
     setRoomCode(null);
     setSnapshot(null);
-    setLastEvent(null);
+    setEvents([]);
     setLastAck(null);
     setError(null);
     setStatus("idle");
@@ -567,6 +613,9 @@ export function useRoomSocket(options: UseRoomSocketOptions = {}) {
   }, [openSocket]);
 
   const clearError = useCallback(() => setError(null), []);
+  const consumeEvents = useCallback((throughId: number) => {
+    setEvents((current) => current.filter((delivery) => delivery.id > throughId));
+  }, []);
   const getServerNow = useCallback(() => Date.now() + serverTimeOffsetRef.current, []);
 
   const disposeConnection = useCallback(() => {
@@ -596,7 +645,8 @@ export function useRoomSocket(options: UseRoomSocketOptions = {}) {
     connected: status === "connected",
     roomCode,
     snapshot,
-    lastEvent,
+    events,
+    consumeEvents,
     lastAck,
     error,
     serverTimeOffsetMs,

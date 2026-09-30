@@ -3,8 +3,6 @@
 import Link from "next/link";
 import {
   type CSSProperties,
-  type ChangeEvent,
-  type KeyboardEvent,
   type AnimationEvent as ReactAnimationEvent,
   useCallback,
   useEffect,
@@ -26,6 +24,8 @@ import {
   type MobileKeyboardMode,
 } from "./mobile-keyboard";
 import { useRoomSocket } from "./useRoomSocket";
+import { OnlineTyping } from "./online-typing";
+import { EnglishTypingInput } from "./EnglishTypingInput";
 import { WORD_BOOKS, WORD_BOOK_OPTIONS, type WordbookId } from "./wordbooks";
 import {
   DEFAULT_AI_LEVEL,
@@ -34,6 +34,7 @@ import {
   sanitizeRoomCode,
   type AiLevel,
   type RoomEvent,
+  type PendingAttack,
   type RoomPlayer,
   type RoomSnapshot,
   type RoomWord,
@@ -105,6 +106,7 @@ type Projectile = {
   apexY: number;
   toX: number;
   toY: number;
+  elapsedMs?: number;
 };
 
 type CharacterPhase =
@@ -840,6 +842,8 @@ export default function SnowballGame() {
   const setMusicScene = gameAudio.setMusicScene;
   const playOutcomeMusic = gameAudio.playOutcomeMusic;
   const room = useRoomSocket({ autoResume: true });
+  const roomEvents = room.events;
+  const consumeRoomEvents = room.consumeEvents;
 
   const shellRef = useRef<HTMLElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -861,18 +865,20 @@ export default function SnowballGame() {
   const gameStartedAtRef = useRef(0);
   const sequenceRef = useRef(0);
   const lockedWordsRef = useRef(new Set<number>());
-  const pendingOnlineTypingSequencesRef = useRef(new Set<number>());
-  const optimisticallyClaimedWordIdsRef = useRef(new Set<number>());
+  const onlineTypingRef = useRef(new OnlineTyping());
   const timersRef = useRef<ManagedTimer[]>([]);
+  const timerGenerationRef = useRef(0);
   const actorAvailableAtRef = useRef<Record<string, number>>({});
   const pausedAtRef = useRef(0);
   const inviteHandledRef = useRef(false);
-  const handledRoomEventRef = useRef<RoomEvent | null>(null);
+  const handledRoomEventRef = useRef(0);
   const onlinePhaseRef = useRef<RoomSnapshot["phase"] | null>(null);
+  const onlineMatchRef = useRef<Pick<RoomSnapshot, "code" | "startedAt" | "phase" | "selfPlayerId"> | null>(null);
   const eliminatedPlayerIdsRef = useRef(new Set<string>());
   const fallingPlayerIdsRef = useRef(new Set<string>());
   const fallenPlayerIdsRef = useRef(new Set<string>());
   const playedRoomAudioEventsRef = useRef(new Set<string>());
+  const animatedRoomAttacksRef = useRef(new Set<string>());
   const mobileKeyboardPreferenceRef = useRef<MobileKeyboardMode | null>(null);
   const isOnline = gameMode === "online" || room.status !== "idle";
   const onlineSnapshot = isOnline ? room.snapshot : null;
@@ -1152,41 +1158,79 @@ export default function SnowballGame() {
 
   useEffect(() => {
     if (isOnline && room.connected) return;
-    pendingOnlineTypingSequencesRef.current.clear();
-    optimisticallyClaimedWordIdsRef.current.clear();
+    onlineTypingRef.current.clear();
   }, [isOnline, room.connected]);
 
   useEffect(() => {
     if (!isOnline || !room.lastAck) return;
-    for (const sequence of pendingOnlineTypingSequencesRef.current) {
-      if (sequence <= room.lastAck.sequence) {
-        pendingOnlineTypingSequencesRef.current.delete(sequence);
-      }
-    }
+    onlineTypingRef.current.acknowledge(room.lastAck.sequence, room.lastAck.revision);
   }, [isOnline, room.lastAck]);
 
   useEffect(() => {
-    if (!isOnline || !onlineSnapshot) return;
+    if (room.error?.id) onlineTypingRef.current.reject(room.error.id);
+  }, [room.error]);
+
+  const clearPendingTimers = useCallback(() => {
+    ++timerGenerationRef.current;
+    timersRef.current.forEach((timer) => window.clearTimeout(timer.id));
+    timersRef.current = [];
+  }, []);
+
+  useEffect(() => {
+    if (!isOnline || !onlineSnapshot) {
+      onlineMatchRef.current = null;
+      return;
+    }
+    const previousMatch = onlineMatchRef.current;
+    const newMatch = !previousMatch
+      || previousMatch.code !== onlineSnapshot.code
+      || previousMatch.selfPlayerId !== onlineSnapshot.selfPlayerId
+      || previousMatch.startedAt !== onlineSnapshot.startedAt;
+    const enteringSetup = previousMatch?.phase !== onlineSnapshot.phase
+      && (onlineSnapshot.phase === "lobby" || onlineSnapshot.phase === "countdown");
+    if (newMatch || enteringSetup) {
+      // A reconnect can skip lobby/countdown entirely. The server's start time
+      // identifies the round; ordinary snapshots within a round keep its stats.
+      clearPendingTimers();
+      actorAvailableAtRef.current = {};
+      onlineTypingRef.current.clear();
+      animatedRoomAttacksRef.current.clear();
+      playedRoomAudioEventsRef.current.clear();
+      eliminatedPlayerIdsRef.current.clear();
+      fallingPlayerIdsRef.current.clear();
+      fallenPlayerIdsRef.current.clear();
+      lockedWordsRef.current.clear();
+      onlinePhaseRef.current = null;
+      gameStartedAtRef.current = 0;
+      lastClaimRef.current = 0;
+      pausedAtRef.current = 0;
+      setProjectiles([]);
+      setCatchEffects([]);
+      setCharacterActions(createIdleActions());
+      setCorrectKeys(0);
+      setWrongKeys(0);
+      setElapsed(0);
+      setInputError(false);
+    }
+    onlineMatchRef.current = {
+      code: onlineSnapshot.code, startedAt: onlineSnapshot.startedAt,
+      phase: onlineSnapshot.phase, selfPlayerId: onlineSnapshot.selfPlayerId,
+    };
     const now = Date.now();
     const mappedPlayers = onlineSnapshot.players.map((player) =>
       mapRoomPlayer(player, onlineSnapshot.selfPlayerId, onlineServerTimeOffsetMs));
-    const authoritativeWordIds = new Set(onlineSnapshot.words.map((word) => word.id));
-    for (const wordId of optimisticallyClaimedWordIdsRef.current) {
-      if (!authoritativeWordIds.has(wordId)) {
-        optimisticallyClaimedWordIdsRef.current.delete(wordId);
-      }
-    }
+    onlineTypingRef.current.reconcile(onlineSnapshot);
     const mappedWords = onlineSnapshot.words
       .map((word) => mapRoomWord(word, onlineSnapshot, onlineServerTimeOffsetMs))
       .filter((word) =>
         word.expiresAt > now
-        && !optimisticallyClaimedWordIdsRef.current.has(word.id));
+        && !onlineTypingRef.current.claims.has(word.id));
     if (onlineSnapshot.phase === "lobby" || onlineSnapshot.phase === "countdown") {
       eliminatedPlayerIdsRef.current.clear();
       fallingPlayerIdsRef.current.clear();
       fallenPlayerIdsRef.current.clear();
-      pendingOnlineTypingSequencesRef.current.clear();
-      optimisticallyClaimedWordIdsRef.current.clear();
+      onlineTypingRef.current.clear();
+      animatedRoomAttacksRef.current.clear();
     }
     for (const player of mappedPlayers) {
       const previous = playersRef.current.find((candidate) => candidate.id === player.id);
@@ -1238,7 +1282,7 @@ export default function SnowballGame() {
     const typingBufferStillMatches = !selfTyping?.buffer
       || mappedWords.some((word) => word.text.startsWith(selfTyping.buffer));
     const typingIsVisible = Boolean(selfTyping && typingTargetIsVisible && typingBufferStillMatches);
-    const hasPendingTypingCommands = pendingOnlineTypingSequencesRef.current.size > 0;
+    const hasPendingTypingCommands = onlineTypingRef.current.pending.size > 0;
     if (!hasPendingTypingCommands || onlineSnapshot.phase !== "playing") {
       const nextTyped = typingIsVisible ? selfTyping?.buffer ?? "" : "";
       typedRef.current = nextTyped;
@@ -1281,11 +1325,13 @@ export default function SnowballGame() {
       ));
     }
   }, [
+    clearPendingTimers,
     getOnlineServerNow,
     isOnline,
     lockTargetWord,
     onlineServerTimeOffsetMs,
     onlineSnapshot,
+    room.error,
     setGameStage,
     textNow,
   ]);
@@ -1302,15 +1348,18 @@ export default function SnowballGame() {
 
   const scheduleTimer = useCallback((callback: () => void, delay: number) => {
     const remaining = Math.max(0, delay);
+    const generation = timerGenerationRef.current;
     const timer: ManagedTimer = {
       id: 0,
       dueAt: Date.now() + remaining,
       remaining,
-      callback,
+      callback: () => {
+        if (generation === timerGenerationRef.current) callback();
+      },
     };
     timer.id = window.setTimeout(() => {
       timersRef.current = timersRef.current.filter((candidate) => candidate !== timer);
-      callback();
+      timer.callback();
     }, remaining);
     timersRef.current.push(timer);
     return timer.id;
@@ -1333,11 +1382,6 @@ export default function SnowballGame() {
         timer.callback();
       }, timer.remaining);
     });
-  }, []);
-
-  const clearPendingTimers = useCallback(() => {
-    timersRef.current.forEach((timer) => window.clearTimeout(timer.id));
-    timersRef.current = [];
   }, []);
 
   const say = useCallback(
@@ -1612,14 +1656,23 @@ export default function SnowballGame() {
         authoritative?: boolean;
         targetId?: string | null;
         targetIds?: string[];
-        startsInMs?: number;
+        startsAt?: number;
+        throwAt?: number;
+        resolveAt?: number;
       },
     ) => {
       const now = Date.now();
-      const requestedStart = now + Math.max(0, options?.startsInMs ?? 0);
-      const startsAt = Math.max(requestedStart, actorAvailableAtRef.current[player.id] ?? now);
+      const startsAt = options?.authoritative && options.startsAt !== undefined
+        ? options.startsAt
+        : Math.max(now, actorAvailableAtRef.current[player.id] ?? now);
+      const throwAt = options?.throwAt ?? startsAt + 900;
+      const resolveAt = options?.resolveAt ?? throwAt + 610;
+      if (resolveAt <= now) return;
       const queueDelay = startsAt - now;
-      actorAvailableAtRef.current[player.id] = startsAt + 1850;
+      if (!options?.authoritative) actorAvailableAtRef.current[player.id] = startsAt + 1850;
+      const schedulePhase = (callback: () => void, delay: number, endsAt: number) => {
+        if (now < endsAt) scheduleTimer(callback, Math.max(0, delay));
+      };
       const currentTargets = playersRef.current
         .filter((candidate) => candidate.active && candidate.team !== player.team && candidate.health > 0)
         .sort((left, right) => left.position - right.position);
@@ -1636,7 +1689,7 @@ export default function SnowballGame() {
         Boolean(
           attacker
           && attacker.health > 0
-          && stageRef.current !== "ended"
+          && stageRef.current === "playing"
           && !eliminatedPlayerIdsRef.current.has(attacker.id),
         );
 
@@ -1645,7 +1698,7 @@ export default function SnowballGame() {
       const catchId = ++sequenceRef.current;
       let throwToken: number | undefined;
 
-      scheduleTimer(() => {
+      schedulePhase(() => {
         const attacker = playersRef.current.find((candidate) => candidate.id === player.id);
         if (!canAnimate(attacker)) return;
         const mitten = kidNodesRef.current
@@ -1667,24 +1720,25 @@ export default function SnowballGame() {
         };
         setCatchEffects((current) => [...current, catchEffect]);
         setCharacterPose(player.id, "catch", word.text, word.kind);
-      }, queueDelay);
-      scheduleTimer(() => {
+      }, queueDelay, startsAt + 410);
+      schedulePhase(() => {
         setCatchEffects((current) => current.filter((effect) => effect.id !== catchId));
         const attacker = playersRef.current.find((candidate) => candidate.id === player.id);
         if (canAnimate(attacker)) {
           setCharacterPose(player.id, "hold", word.text, word.kind);
-          playSfx("pack");
+          if (now <= startsAt + 410) playSfx("pack");
         }
-      }, queueDelay + 410);
-      scheduleTimer(() => {
+      }, queueDelay + 410, startsAt + 650);
+      schedulePhase(() => {
         const attacker = playersRef.current.find((candidate) => candidate.id === player.id);
         if (canAnimate(attacker)) {
           setCharacterPose(player.id, "windup", word.text, word.kind);
         }
-      }, queueDelay + 650);
+      }, queueDelay + 650, throwAt);
       scheduleTimer(() => {
         const attacker = playersRef.current.find((candidate) => candidate.id === player.id);
-        if (!attacker || !canAnimate(attacker)) return;
+        const alreadyInFlight = options?.authoritative && throwAt <= now;
+        if (!attacker || (!alreadyInFlight && !canAnimate(attacker))) return;
         const targets = lockedTargetIds
           .map((targetId) => playersRef.current.find((candidate) => candidate.id === targetId))
           .filter((target): target is Player => Boolean(target?.active && target.team !== player.team));
@@ -1720,10 +1774,11 @@ export default function SnowballGame() {
             apexY: Math.max(8, Math.min(freshSource.y, freshTarget.y) - 28),
             toX: freshTarget.x,
             toY: freshTarget.y,
+            elapsedMs: options?.authoritative ? Math.max(0, Date.now() - throwAt) : 0,
           } satisfies Projectile;
         });
         const projectileIds = new Set(projectiles.map((projectile) => projectile.id));
-        throwToken = setCharacterPose(attacker.id, "throw", word.text, word.kind);
+        if (canAnimate(attacker)) throwToken = setCharacterPose(attacker.id, "throw", word.text, word.kind);
         setProjectiles((current) => [...current, ...projectiles]);
         scheduleTimer(() => {
           setProjectiles((current) => current.filter((item) => !projectileIds.has(item.id)));
@@ -1762,15 +1817,36 @@ export default function SnowballGame() {
                 : `${word.text} lands harmlessly in the snow`,
             );
           }
-        }, 610);
-      }, queueDelay + 900);
+        }, Math.max(0, resolveAt - Date.now()));
+      }, Math.max(0, throwAt - now));
       scheduleTimer(
         () => settleCharacterPose(player.id, "throw", throwToken),
-        queueDelay + 1740,
+        Math.max(0, queueDelay + 1740),
       );
     },
     [applyDamage, playSfx, pointInArena, say, scheduleTimer, setCharacterPose, settleCharacterPose],
   );
+
+  const animateRoomAttack = useCallback((attack: PendingAttack, snapshot: RoomSnapshot, word?: RoomWord) => {
+    const key = `${snapshot.code}:${snapshot.startedAt}:${attack.id}`;
+    if (animatedRoomAttacksRef.current.has(key)) return;
+    animatedRoomAttacksRef.current.add(key);
+    if (attack.resolved || attack.resolveAt <= getOnlineServerNow()) return;
+    const attacker = playersRef.current.find((player) => player.id === attack.attackerId);
+    if (!attacker) return;
+    const anchor = getActorAnchor(attacker);
+    const origin: RoomWord = word ?? {
+      id: -1, text: attack.word, kind: attack.kind, x: anchor.x, restY: anchor.handY,
+      speed: 0, drift: 0, bornAt: attack.startsAt, landedAt: attack.startsAt,
+      expiresAt: attack.resolveAt, aiPlayerId: null, aiStartedAt: null, aiClaimAt: null,
+    };
+    launchSnowball(attacker, mapRoomWord(origin, snapshot, onlineServerTimeOffsetMs), attack.damage, {
+      authoritative: true, targetId: attack.targetId, targetIds: attack.targetIds,
+      startsAt: attack.startsAt - onlineServerTimeOffsetMs,
+      throwAt: attack.throwAt - onlineServerTimeOffsetMs,
+      resolveAt: attack.resolveAt - onlineServerTimeOffsetMs,
+    });
+  }, [getOnlineServerNow, launchSnowball, onlineServerTimeOffsetMs]);
 
   const claimWord = useCallback(
     (wordId: number, playerId: string) => {
@@ -1825,117 +1901,127 @@ export default function SnowballGame() {
   );
 
   useEffect(() => {
-    const event: RoomEvent | null = isOnline ? room.lastEvent : null;
-    if (!event || !onlineSnapshot) return;
-    if (handledRoomEventRef.current === event) return;
-    handledRoomEventRef.current = event;
-    if (event.type === "word.claimed") {
-      const attacker = playersRef.current.find((player) => player.id === event.attackerId);
-      if (!attacker) return;
-      const claimSfxEventKey = getPersonalClaimSfxEventKey(
-        onlineSnapshot.code,
-        event.claimId,
-        event.attackerId,
-        onlineSnapshot.selfPlayerId,
-      );
-      if (claimSfxEventKey && rememberRoomAudioEvent(claimSfxEventKey)) {
-        playSfx("claim");
-      }
-      const claimedWord = mapRoomWord(event.word, onlineSnapshot, onlineServerTimeOffsetMs);
-      launchSnowball(attacker, claimedWord, event.damage, {
-        authoritative: true,
-        targetId: event.targetId,
-        targetIds: event.targetIds,
-        startsInMs: Math.max(0, event.startsAt - getOnlineServerNow()),
-      });
-      setAnnouncement(
-        textNow(attacker.isUser
-          ? `${event.word.text} — 服务器确认你最快！`
-          : `${attacker.name} 抢走了 ${event.word.text}`,
-        attacker.isUser
-          ? `${event.word.text} — The server confirms you were fastest!`
-          : `${attacker.name} claimed ${event.word.text}`),
-      );
-      return;
-    }
-    if (event.type === "typing.rejected" && event.playerId === onlineSnapshot.selfPlayerId) {
-      setInputError(true);
-      if (event.reason === "FROZEN") {
-        setAnnouncement(textNow("❄ 你被冻结了，1 秒后继续输入", "❄ You are frozen. Resume typing in 1 second"));
-      }
-      window.setTimeout(() => setInputError(false), 260);
-      return;
-    }
-    if (event.type === "attack.resolved") {
-      const damagingHits = event.hits.filter((hit) => hit.actualDamage > 0);
-      const audioScope = onlineSnapshot.code;
-      if (
-        !event.missed
-        && damagingHits.length > 0
-        && rememberRoomAudioEvent(`${audioScope}:hit:${event.attackId}`)
-      ) {
-        playSfx("hit");
-      }
-      damagingHits
-        .filter((hit) => hit.targetHealth === 0)
-        .forEach((hit, index) => {
-          if (!rememberRoomAudioEvent(`${audioScope}:down:${event.attackId}:${hit.targetId}`)) return;
-          scheduleTimer(() => playSfx("down"), 100 + index * 70);
-        });
-      for (const hit of event.hits) {
-        if (hit.targetHealth !== 0) continue;
-        const wasEliminated = eliminatedPlayerIdsRef.current.has(hit.targetId);
-        eliminatedPlayerIdsRef.current.add(hit.targetId);
-        if (!wasEliminated) {
-          fallingPlayerIdsRef.current.add(hit.targetId);
-          fallenPlayerIdsRef.current.delete(hit.targetId);
+    if (!isOnline || !onlineSnapshot || !roomEvents.length) return;
+    const handleEvent = (event: RoomEvent) => {
+      if (event.type === "word.claimed") {
+        const attacker = playersRef.current.find((player) => player.id === event.attackerId);
+        if (!attacker) return;
+        const claimSfxEventKey = getPersonalClaimSfxEventKey(
+          onlineSnapshot.code,
+          event.claimId,
+          event.attackerId,
+          onlineSnapshot.selfPlayerId,
+        );
+        if (claimSfxEventKey && rememberRoomAudioEvent(claimSfxEventKey)) {
+          playSfx("claim");
         }
-        setCatchEffects((current) => current.filter(
-          (effect) => effect.sourcePlayerId !== hit.targetId,
-        ));
+        animateRoomAttack({
+          ...event, id: event.attackId, word: event.word.text, kind: event.word.kind, resolved: false,
+        }, onlineSnapshot, event.word);
+        setAnnouncement(
+          textNow(attacker.isUser
+            ? `${event.word.text} — 服务器确认你最快！`
+            : `${attacker.name} 抢走了 ${event.word.text}`,
+          attacker.isUser
+            ? `${event.word.text} — The server confirms you were fastest!`
+            : `${attacker.name} claimed ${event.word.text}`),
+        );
+        return;
       }
-      const target = event.targetId
-        ? playersRef.current.find((player) => player.id === event.targetId)
-        : null;
-      const frozenHits = event.hits.filter((hit) => hit.frozenUntil !== null);
-      setAnnouncement(textNow(
-        event.missed || !target
-          ? target && !fallenPlayerIdsRef.current.has(target.id)
-            ? `雪球撞上正在倒下的 ${target.name}，没有额外伤害`
-            : "雪球落在了空雪地上"
-          : event.kind === "frost" && frozenHits.length > 0
-            ? `超级雪花命中 ${event.hits.length} 人，冻住对方全体 1 秒！`
-            : `${target.name} 承受 ${event.actualDamage} 点伤害`,
-        event.missed || !target
-          ? target && !fallenPlayerIdsRef.current.has(target.id)
-            ? `The snowball hits ${target.name} while they are falling, but deals no extra damage`
-            : "The snowball lands harmlessly in the snow"
-          : event.kind === "frost" && frozenHits.length > 0
-            ? `The Super Snowflake hits ${event.hits.length} ${event.hits.length === 1 ? "player" : "players"} and freezes the whole enemy team for 1 second!`
-            : `${target.name} takes ${event.actualDamage} damage`,
+      if (event.type === "typing.rejected" && event.playerId === onlineSnapshot.selfPlayerId) {
+        setInputError(true);
+        if (event.reason === "FROZEN") {
+          setAnnouncement(textNow("❄ 你被冻结了，1 秒后继续输入", "❄ You are frozen. Resume typing in 1 second"));
+        }
+        scheduleTimer(() => setInputError(false), 260);
+        return;
+      }
+      if (event.type === "attack.resolved") {
+        const damagingHits = event.hits.filter((hit) => hit.actualDamage > 0);
+        const audioScope = onlineSnapshot.code;
+        if (
+          !event.missed
+          && damagingHits.length > 0
+          && rememberRoomAudioEvent(`${audioScope}:hit:${event.attackId}`)
+        ) {
+          playSfx("hit");
+        }
+        damagingHits
+          .filter((hit) => hit.targetHealth === 0)
+          .forEach((hit, index) => {
+            if (!rememberRoomAudioEvent(`${audioScope}:down:${event.attackId}:${hit.targetId}`)) return;
+            scheduleTimer(() => playSfx("down"), 100 + index * 70);
+          });
+        for (const hit of event.hits) {
+          if (hit.targetHealth !== 0) continue;
+          const wasEliminated = eliminatedPlayerIdsRef.current.has(hit.targetId);
+          eliminatedPlayerIdsRef.current.add(hit.targetId);
+          if (!wasEliminated) {
+            fallingPlayerIdsRef.current.add(hit.targetId);
+            fallenPlayerIdsRef.current.delete(hit.targetId);
+          }
+          setCatchEffects((current) => current.filter(
+            (effect) => effect.sourcePlayerId !== hit.targetId,
+          ));
+        }
+        const target = event.targetId
+          ? playersRef.current.find((player) => player.id === event.targetId)
+          : null;
+        const frozenHits = event.hits.filter((hit) => hit.frozenUntil !== null);
+        setAnnouncement(textNow(
+          event.missed || !target
+            ? target && !fallenPlayerIdsRef.current.has(target.id)
+              ? `雪球撞上正在倒下的 ${target.name}，没有额外伤害`
+              : "雪球落在了空雪地上"
+            : event.kind === "frost" && frozenHits.length > 0
+              ? `超级雪花命中 ${event.hits.length} 人，冻住对方全体 1 秒！`
+              : `${target.name} 承受 ${event.actualDamage} 点伤害`,
+          event.missed || !target
+            ? target && !fallenPlayerIdsRef.current.has(target.id)
+              ? `The snowball hits ${target.name} while they are falling, but deals no extra damage`
+              : "The snowball lands harmlessly in the snow"
+            : event.kind === "frost" && frozenHits.length > 0
+              ? `The Super Snowflake hits ${event.hits.length} ${event.hits.length === 1 ? "player" : "players"} and freezes the whole enemy team for 1 second!`
+              : `${target.name} takes ${event.actualDamage} damage`,
+        ));
+        return;
+      }
+      if (event.type === "match.started") {
+        playedRoomAudioEventsRef.current.clear();
+        setAnnouncement(textNow("联机对战开始！", "Online battle started!"));
+      }
+      if (event.type === "match.ended") setAnnouncement(textNow(
+        `${event.winner === "pine" ? "雪松队" : "红莓队"}获胜！`,
+        `${event.winner === "pine" ? "Pine Team" : "Berry Team"} wins!`,
       ));
-      return;
+    };
+    for (const delivery of roomEvents) {
+      if (delivery.id <= handledRoomEventRef.current) continue;
+      handledRoomEventRef.current = delivery.id;
+      // React may batch a previous round's event with the new round's snapshot.
+      if (onlineSnapshot.startedAt === null
+        || delivery.serverTime < onlineSnapshot.startedAt
+        || (onlineSnapshot.phase !== "playing" && onlineSnapshot.phase !== "ended")) continue;
+      if (delivery.event.type === "word.claimed" && onlineSnapshot.phase !== "playing") continue;
+      handleEvent(delivery.event);
     }
-    if (event.type === "match.started") {
-      playedRoomAudioEventsRef.current.clear();
-      setAnnouncement(textNow("联机对战开始！", "Online battle started!"));
-    }
-    if (event.type === "match.ended") setAnnouncement(textNow(
-      `${event.winner === "pine" ? "雪松队" : "红莓队"}获胜！`,
-      `${event.winner === "pine" ? "Pine Team" : "Berry Team"} wins!`,
-    ));
+    consumeRoomEvents(handledRoomEventRef.current);
   }, [
-    getOnlineServerNow,
+    animateRoomAttack,
     isOnline,
-    launchSnowball,
-    onlineServerTimeOffsetMs,
     onlineSnapshot,
     playSfx,
     rememberRoomAudioEvent,
-    room.lastEvent,
+    roomEvents,
+    consumeRoomEvents,
     scheduleTimer,
     textNow,
   ]);
+
+  useEffect(() => {
+    if (!isOnline || !onlineSnapshot || onlineSnapshot.phase !== "playing") return;
+    for (const attack of onlineSnapshot.pendingAttacks) animateRoomAttack(attack, onlineSnapshot);
+  }, [animateRoomAttack, isOnline, onlineSnapshot]);
 
   const spawnWord = useCallback(
     (seedY?: number, forcedKind?: SnowWordKind) => {
@@ -2263,10 +2349,8 @@ export default function SnowballGame() {
   }, [isOnline, pausePendingTimers, setGameStage, textNow]);
 
   useEffect(
-    () => () => {
-      timersRef.current.forEach((timer) => window.clearTimeout(timer.id));
-    },
-    [],
+    () => clearPendingTimers,
+    [clearPendingTimers],
   );
 
   const applyLocalInputValue = (rawValue: string) => {
@@ -2325,11 +2409,11 @@ export default function SnowballGame() {
     if (stageRef.current !== "playing" || !userAlive || userFrozen || !room.connected) return;
 
     const availableWords = pruneExpiredWords(Date.now()).filter(
-      (word) => !optimisticallyClaimedWordIdsRef.current.has(word.id),
+      (word) => !onlineTypingRef.current.claims.has(word.id),
     );
     const sentCommand = room.sendCommand({ op: "type.key", key });
     if (!sentCommand) return;
-    pendingOnlineTypingSequencesRef.current.add(sentCommand.sequence);
+    onlineTypingRef.current.track(sentCommand);
     const nextValue = `${typedRef.current}${key}`.slice(0, MAX_WORD_LENGTH);
     const target = targetWordIdRef.current === null
       ? null
@@ -2351,7 +2435,7 @@ export default function SnowballGame() {
       ? matches[0]
       : null;
     if (exact) {
-      optimisticallyClaimedWordIdsRef.current.add(exact.id);
+      onlineTypingRef.current.track(sentCommand, exact.id);
       const nextWords = wordsRef.current.filter((word) => word.id !== exact.id);
       wordsRef.current = nextWords;
       setWords(nextWords);
@@ -2364,7 +2448,7 @@ export default function SnowballGame() {
   const clearTypingInput = () => {
     if (isOnline) {
       const sentCommand = room.sendCommand({ op: "type.cancel" });
-      if (sentCommand) pendingOnlineTypingSequencesRef.current.add(sentCommand.sequence);
+      if (sentCommand) onlineTypingRef.current.track(sentCommand);
     }
     typedRef.current = "";
     setTyped("");
@@ -2372,21 +2456,16 @@ export default function SnowballGame() {
     setInputError(false);
   };
 
-  const handleInput = (event: ChangeEvent<HTMLInputElement>) => {
-    if (isOnline) return;
-    applyLocalInputValue(event.target.value);
-  };
-
-  const handleInputKeyDown = (event: KeyboardEvent<HTMLInputElement>) => {
-    if (isOnline && /^[a-zA-Z]$/.test(event.key)) {
-      event.preventDefault();
-      applyTypingKey(event.key);
+  const handleInputValue = (rawValue: string) => {
+    if (!isOnline) {
+      applyLocalInputValue(rawValue);
       return;
     }
-    if (event.key === "Escape" || event.key === " " || (isOnline && event.key === "Backspace")) {
-      event.preventDefault();
-      clearTypingInput();
-    }
+    const nextValue = rawValue.toLowerCase().replace(/[^a-z]/g, "").slice(0, MAX_WORD_LENGTH);
+    const previous = typedRef.current;
+    const suffix = nextValue.startsWith(previous) ? nextValue.slice(previous.length) : nextValue;
+    if (!nextValue.startsWith(previous)) clearTypingInput();
+    for (const key of suffix) applyTypingKey(key);
   };
 
   const toggleMobileKeyboard = () => {
@@ -2912,6 +2991,7 @@ export default function SnowballGame() {
                     "--projectile-apex-y": `${projectile.apexY}%`,
                     "--projectile-to-x": `${projectile.toX}%`,
                     "--projectile-to-y": `${projectile.toY}%`,
+                    animationDelay: `${-(projectile.elapsedMs ?? 0)}ms`,
                   } as CSSProperties
                 }
                 aria-hidden="true"
@@ -2993,12 +3073,13 @@ export default function SnowballGame() {
                       : text("你已出局", "you are out"))}
                   </div>
                 ) : (
-                  <input
+                  <EnglishTypingInput
                     ref={inputRef}
                     value={typed}
                     maxLength={MAX_WORD_LENGTH}
-                    onChange={handleInput}
-                    onKeyDown={handleInputKeyDown}
+                    onValueChange={handleInputValue}
+                    onClear={clearTypingInput}
+                    clearOnBackspace={isOnline}
                     disabled={typingDisabled}
                     placeholder={userAlive
                       ? userFrozen

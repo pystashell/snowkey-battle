@@ -83,6 +83,26 @@ npm run test:live:smoke
 npm run test:live:reclaim
 ```
 
+The input, prediction, socket and Worker regressions also run in `npm test` and
+can be run separately with `npm run test:network`. GitHub Actions runs the full
+test/build/typecheck chain and lint on pull requests and pushes to `main`.
+
+`npm run test:browser` exercises two isolated browsers against an explicitly
+selected `SNOW_BATTLE_URL`, including a real frost rejection, recovery during an
+in-flight throw, the compact keyboard, a complete match, and an online rematch
+with cleared animation queues and reset input statistics. It requires an
+available Playwright installation; set `SNOW_PLAYWRIGHT_MODULE` to its `index.mjs`
+file URL if it is outside this repository, and optionally `SNOW_BROWSER_PATH` to
+a Chromium executable. Screenshots and the result go to ignored `test-results/`.
+The test records the existing local-preview favicon CSP warning separately from
+application errors.
+
+Room admission has separate per-address token budgets for creation (8 request
+burst, 6/minute refill) and joining (30 burst, 30/minute refill), stored in
+separate objects in the existing Durable Object namespace. Each socket allows
+an 80-message burst with 30/second refill, preserved across hibernation. These
+application budgets do not replace any account-level traffic controls.
+
 Deploy your own Worker and Durable Object:
 
 ```bash
