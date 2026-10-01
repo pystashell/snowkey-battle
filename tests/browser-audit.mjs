@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { mkdir, writeFile } from "node:fs/promises";
+import { finishMatchByTyping } from "./helpers/browser-match.mjs";
 
 const baseUrl = process.env.SNOW_BATTLE_URL;
 if (!baseUrl) throw new Error("Set SNOW_BATTLE_URL to the explicitly selected local/test server.");
@@ -131,14 +132,7 @@ try {
   await hostInput.fill(wrongInitial.repeat(10));
 
   // Finish a real 1v1 match; the two browsers must agree on health and winner.
-  const deadline = Date.now() + 70_000;
-  while (Date.now() < deadline && host.snapshot.phase === "playing") {
-    if (await hostInput.isEnabled()) {
-      const word = host.snapshot.words.find((candidate) => candidate.expiresAt > Date.now() + 300);
-      if (word) { await hostInput.press("Escape"); await hostInput.fill(word.text); }
-    }
-    await sleep(350);
-  }
+  await finishMatchByTyping({ input: hostInput, getSnapshot: () => host.snapshot });
   await until(() => host.snapshot.phase === "ended" && guest.snapshot.phase === "ended", "both browsers finish", 15_000);
   assert.equal(host.snapshot.winner, guest.snapshot.winner);
   assert.deepEqual(host.snapshot.players.map((player) => [player.id, player.health]), guest.snapshot.players.map((player) => [player.id, player.health]));

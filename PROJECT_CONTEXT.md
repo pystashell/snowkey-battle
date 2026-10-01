@@ -2,6 +2,45 @@
 
 Last handoff update: 2026-10-01
 
+## PR #2 audit-script review follow-up (2026-10-01)
+
+The [latest review of PR #2](https://github.com/pystashell/snowkey-battle/pull/2#issuecomment-5924771419)
+confirmed the session-budget repair and identified a browser-audit race: the
+server could finish a match between the enabled check and `fill`, leaving the
+script waiting 30 seconds on a disabled input. Three deterministic regressions
+failed against the original loop. The helper now rechecks the authoritative
+phase after awaited input operations and bounds those operations to 1.5 seconds.
+Only a timeout accompanied by an `ended` snapshot is tolerated. Both players'
+result assertions and the complete rematch audit still run; unrelated errors and
+timeouts while playing remain failures.
+
+The live rate-limit audit now saves diagnostics on success, failure, and
+inconclusive runs, including the stage, elapsed time, total debits, and partial
+connection observations. Each run has a unique JSON artifact, so updating the
+convenience latest file cannot erase earlier attempts. Failed/inconclusive runs
+still exit nonzero; the two-second cutoff and token bounds are unchanged. A
+controlled HTTP/WebSocket fixture runs the actual CLI past that cutoff and
+checks its saved diagnostics and nonzero exit. This fixture tests the audit
+tool, not the authoritative GameRoom implementation.
+
+Validation in this checkout: all 122 tests, typecheck, production build, and
+lint passed, including nine audit-tool regressions. Two consecutive browser
+audits against **http://127.0.0.1:3120** each passed with two isolated Chromium
+contexts, identical match results, and a successful rematch. There were no
+application errors, only the existing local-preview favicon CSP warning. On
+the same idle local server, the live rate-limit audit passed on its first run:
+95 and 2 accepted commands plus two joins consumed 99 tokens over 729 ms,
+below the time-based bound of 102. Refill/watermark recovery and HTTP 429
+admission also passed. The previous gameplay/reclamation `test:live` result
+below was not rerun for this audit-script-only change.
+
+Evidence is preserved under ignored `test-results/pr2-followup-*`,
+`pr2-audit-tools-before.log`, `pr2-audit-tools-after.log`, and the unique
+`session-budget-live-*.json` files. The independent reviewer's original browser
+failure and prior evidence remain available. The local server was stopped after
+validation. No application, shared protocol, Worker, or deployment configuration
+changed in this follow-up, and no production deployment was performed.
+
 ## Session command budget review follow-up (2026-10-01)
 
 The [post-merge review of PR #1](https://github.com/pystashell/snowkey-battle/pull/1#issuecomment-5921522751)

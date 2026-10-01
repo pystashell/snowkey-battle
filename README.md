@@ -95,7 +95,11 @@ available Playwright installation; set `SNOW_PLAYWRIGHT_MODULE` to its `index.mj
 file URL if it is outside this repository, and optionally `SNOW_BROWSER_PATH` to
 a Chromium executable. Screenshots and the result go to ignored `test-results/`.
 The test records the existing local-preview favicon CSP warning separately from
-application errors.
+application errors. During the match-finishing loop, input operations have a
+1.5-second timeout; a timeout is tolerated only after an authoritative `ended`
+snapshot, and both players' results and all rematch assertions still run. Other
+errors remain failures. `npm run test:audit-tools` deterministically covers
+these race windows and the audit evidence recorder, and also runs in `npm test`.
 
 Room admission has separate per-address token budgets for creation (8 request
 burst, 6/minute refill) and joining (30 burst, 30/minute refill), stored in
@@ -120,7 +124,12 @@ WebSockets, refill/watermark recovery, and HTTP upgrade admission. Set
 `SNOW_BATTLE_URL` to an idle local test server. Run this check last: it deliberately
 exhausts that server's admission budget for the test client's address. A run over
 two seconds is reported as inconclusive rather than treating natural refill as
-a reset. The ordinary `test:live` suite does not exhaust admission.
+a reset. Successful, failed, and inconclusive runs all print diagnostics and
+save a separate `test-results/session-budget-live-<run-id>.json`, including the
+stage, elapsed time, debits, and per-connection observations. The convenience
+`session-budget-live.json` points to the latest result; retries retain earlier
+run files. Failed and inconclusive runs exit nonzero. The ordinary `test:live`
+suite does not exhaust admission.
 
 Deploy your own Worker and Durable Object:
 
