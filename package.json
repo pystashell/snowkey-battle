@@ -20,6 +20,7 @@
     "test:live": "npm run test:live:smoke && npm run test:live:reclaim",
     "test:live:smoke": "node tests/live-room-smoke.mjs",
     "test:live:reclaim": "node tests/live-room-reclaim.mjs",
+    "test:live:rate-limit": "node tests/live-room-rate-limit.mjs",
     "test:browser": "node tests/browser-audit.mjs",
     "generate:wordbooks": "node scripts/generate-exam-wordbooks.mjs",
     "lint": "eslint . --ignore-pattern dist --ignore-pattern .next --ignore-pattern .local-previews --ignore-pattern worker-configuration.d.ts",

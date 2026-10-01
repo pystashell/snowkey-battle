@@ -2,6 +2,62 @@
 
 Last handoff update: 2026-10-01
 
+## Session command budget review follow-up (2026-10-01)
+
+The [post-merge review of PR #1](https://github.com/pystashell/snowkey-battle/pull/1#issuecomment-5921522751)
+identified a P2 gap in the per-socket command budget. The reviewed tree matches
+`main` at `57e5cd3`. A fixed-clock reproduction accepted 79 commands and made 79
+room writes on each of two connections using the same credentials, without
+waiting for refill. The second connection now receives `RATE_LIMITED` before
+changing membership, writing storage, or broadcasting.
+
+The room now owns a durable session budget in addition to the existing socket
+gate. Successful joins and validated commands debit the same 80-token bucket
+with 30/second refill across socket replacement and object reconstruction.
+Failed authentication does not charge a claimed session; malformed frames are
+still rejected before storage work. Pings, sync requests, and duplicate sequences
+also debit the session bucket. The command protocol and battle rules are unchanged.
+
+Storage and lifecycle details:
+
+- `command-budgets` lives in the room's existing Durable Object. Mutations save
+  the room and budget map together in one atomic, two-key storage batch.
+  Read-only commands save only the small map; a storage-call count is not a
+  physical-write or billing measurement.
+- Remaining budget persists after leave/kick until it naturally refills, so
+  immediately leaving and rejoining cannot reset it. Fully refilled records are
+  removed by the room alarm (at most 2.667 seconds after the last debit); a
+  budget-only cleanup does not write or broadcast the full room. Room retirement
+  deletes all budgets. No new namespace or migration is needed.
+- Existing stored rooms without the new key recover budgets from their joined
+  hibernating socket attachments. Runtime tests cover reconstruction without an
+  old socket, exact refill, concurrent reconnects, credential isolation, cleanup,
+  and Worker admission routing. The routing harness substitutes storage/socket
+  I/O and is distinct from the live network test below.
+
+Validation in the canonical workspace: `npm test` passed 113 tests, typecheck,
+and production build; lint passed. At **http://127.0.0.1:3118**, `test:live`
+passed gameplay, host transfer, kick/credential rejection, and abrupt-disconnect
+reclamation after about 68 seconds. Two isolated Chromium contexts passed the
+full browser audit including reload during a throw and rematch. One browser run
+exposed a test race: it checked the compact-keyboard toggle before resize-driven
+React state had rendered. The script now waits for mobile controls; its rerun
+passed with no application errors and the existing favicon CSP warning only.
+
+`test:live:rate-limit` exercised actual Worker upgrades and WebSockets: the first
+connection accepted 97 commands while refilling, the immediate replacement
+accepted 1, and total consumption including both joins was 100 tokens over
+789 ms, below the time-based upper bound of 104. Refill preserved the processed
+sequence and player identity, and repeated upgrades eventually returned HTTP
+429 from address admission. This is local correctness evidence, not production
+load/cost validation. The dedicated test refuses to draw a reset conclusion if
+its rapid-reconnect window exceeds two seconds.
+
+Evidence is under ignored `test-results/session-budget-*` plus
+`test-results/audit-browser.json`. The local validation server was stopped after
+testing so it does not hold build output open for the next reviewer. No production
+deployment was performed.
+
 ## Follow-up review evidence checked on 2026-10-01 (Asia/Shanghai)
 
 The supplied `snowkey-review-evidence.zip` (SHA-256

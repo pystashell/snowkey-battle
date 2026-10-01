@@ -111,8 +111,11 @@ try {
   // Exercise the existing compact keyboard through pointer input at a mobile viewport.
   await guest.page.setViewportSize({ width: 390, height: 844 });
   const compactToggle = guest.page.getByRole("button", { name: "Switch to compact keyboard", exact: true });
+  const compactInput = guest.page.getByRole("textbox", { name: "Compact keyboard English input", exact: true });
+  // Resize-driven React state can render after setViewportSize resolves.
+  await until(async () => await compactToggle.count() > 0 || await compactInput.count() > 0, "mobile keyboard controls");
   if (await compactToggle.count()) await compactToggle.click();
-  await until(async () => await guest.page.getByRole("textbox", { name: "Compact keyboard English input", exact: true }).count() === 1, "compact keyboard");
+  await until(async () => await compactInput.count() === 1, "compact keyboard");
   const compactWord = guest.snapshot.words.find((word) => word.kind === "normal");
   assert.ok(compactWord);
   const guestClaims = guest.snapshot.players.find((player) => player.id === guest.snapshot.selfPlayerId).claims;

@@ -100,8 +100,27 @@ application errors.
 Room admission has separate per-address token budgets for creation (8 request
 burst, 6/minute refill) and joining (30 burst, 30/minute refill), stored in
 separate objects in the existing Durable Object namespace. Each socket allows
-an 80-message burst with 30/second refill, preserved across hibernation. These
-application budgets do not replace any account-level traffic controls.
+an 80-message burst with 30/second refill, preserved across hibernation. A
+separate per-room session budget uses the same limits for successful joins and
+validated commands, including pings, sync requests, and duplicate sequences.
+It persists across socket replacement and Durable Object reconstruction; an
+exhausted session cannot reset its budget by reconnecting or briefly leaving.
+Invalid credentials never debit another player's session budget. Malformed
+frames remain subject to the socket budget before any storage work.
+
+Session budgets are stored inside the room's existing Durable Object. Mutations
+atomically save the room and budget map in one storage batch; read-only commands
+save only the small budget map. The room alarm removes budget records once they
+would naturally be full again (at most 2.667 seconds after the last debit), and
+room retirement removes them immediately. These application budgets do not
+replace account-level traffic controls or a separate room-wide load budget.
+
+`npm run test:live:rate-limit` additionally checks rapid reconnects through real
+WebSockets, refill/watermark recovery, and HTTP upgrade admission. Set
+`SNOW_BATTLE_URL` to an idle local test server. Run this check last: it deliberately
+exhausts that server's admission budget for the test client's address. A run over
+two seconds is reported as inconclusive rather than treating natural refill as
+a reset. The ordinary `test:live` suite does not exhaust admission.
 
 Deploy your own Worker and Durable Object:
 
