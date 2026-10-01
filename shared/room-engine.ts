@@ -37,7 +37,7 @@ const ATTACK_THROW_DELAY_MS = 900;
 const ATTACK_RESOLVE_DELAY_MS = 1_510;
 const ACTOR_QUEUE_INTERVAL_MS = 1_850;
 const COMBO_WINDOW_MS = 4_200;
-const MAX_PLAYER_NAME_LENGTH = 8;
+const MAX_AI_NAME_LENGTH = 8;
 const FROST_SPAWN_CHANCE = 0.08;
 const FROST_DAMAGE = 15;
 const FROST_FREEZE_MS = 1_000;
@@ -213,9 +213,7 @@ function normalizeRandom(value: number) {
 }
 
 function sanitizeName(value: string) {
-  const cleaned = Array.from(String(value ?? "").replace(/[\u0000-\u001f\u007f]/g, "").trim())
-    .slice(0, MAX_PLAYER_NAME_LENGTH)
-    .join("");
+  const cleaned = String(value ?? "").replace(/[\u0000-\u001f\u007f]/g, "").trim();
   return cleaned || "雪球手";
 }
 
@@ -227,13 +225,13 @@ function createUniqueAiName(baseName: string, usedNames: Set<string>) {
   if (!usedNames.has(nameKey(baseName))) return baseName;
   for (let index = 1; index <= MAX_TEAM_SIZE * 2; index += 1) {
     const suffix = index === 1 ? "AI" : `AI${index}`;
-    const stemLength = Math.max(0, MAX_PLAYER_NAME_LENGTH - Array.from(suffix).length);
+    const stemLength = Math.max(0, MAX_AI_NAME_LENGTH - Array.from(suffix).length);
     const stem = Array.from(baseName).slice(0, stemLength).join("");
     const candidate = `${stem}${suffix}`;
     if (!usedNames.has(nameKey(candidate))) return candidate;
   }
   return `AI${Math.abs(Array.from(baseName).reduce((total, character) => total + (character.codePointAt(0) ?? 0), 0))}`
-    .slice(0, MAX_PLAYER_NAME_LENGTH);
+    .slice(0, MAX_AI_NAME_LENGTH);
 }
 
 function sanitizeWords(words: readonly string[]) {

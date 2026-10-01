@@ -695,7 +695,7 @@ function Kid({
         <b>{player.health}</b>
       </span>
       {actionLabel[phase] && <span className="kid__action">{actionLabel[phase]}</span>}
-      <span className="kid__name">
+      <span className="kid__name" title={player.name}>
         {isFront ? "🛡 " : ""}{player.name}
       </span>
     </div>
@@ -752,7 +752,7 @@ function RosterCard({
         <b className="roster-card__arm" />
       </span>
       <span className="roster-card__identity">
-        <strong>{player.name}</strong>
+        <strong title={player.name}>{player.name}</strong>
         <small>
           {index === 0 ? text("前排 · ", "Frontline · ") : text(`第 ${index + 1} 位 · `, `Position ${index + 1} · `)}
           {player.maxHealth} HP
@@ -797,7 +797,7 @@ function TeamHealthRows({
     <div className={`member-health-list member-health-list--${team}`}>
       {players.map((player) => (
         <div key={player.id} className={`member-health${player.health <= 0 ? " is-out" : ""}${player.frozenUntil > now ? " is-frozen" : ""}`}>
-          <span>{player.id === frontlineId ? text("前 ", "F ") : ""}{player.frozenUntil > now ? "❄ " : ""}{player.name}</span>
+          <span title={player.name}>{player.id === frontlineId ? text("前 ", "F ") : ""}{player.frozenUntil > now ? "❄ " : ""}{player.name}</span>
           <i><b style={{ width: `${(player.health / player.maxHealth) * 100}%` }} /></i>
           <strong>{player.health}</strong>
         </div>
@@ -2632,7 +2632,7 @@ export default function SnowballGame() {
             <div className="lobby__controls lobby__controls--formation">
               <label>
                 <span>{text("你的名字", "Your name")}</span>
-                <input value={playerName} maxLength={8} onChange={(event) => setPlayerName(event.target.value)} aria-label={text("你的名字", "Your name")} />
+                <input value={playerName} onChange={(event) => setPlayerName(event.target.value)} aria-label={text("你的名字", "Your name")} />
               </label>
               <label>
                 <span>{text("雪松队人数", "Pine team size")}</span>

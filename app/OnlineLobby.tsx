@@ -106,7 +106,7 @@ function OnlineSeat({
       )}
       <span className="online-seat__rank">{player.position === 0 ? text("前", "F") : player.position + 1}</span>
       <span className="online-seat__identity">
-        <strong>{playerDisplayName}{isSelf ? text("（你）", " (You)") : ""}</strong>
+        <strong title={playerDisplayName}>{playerDisplayName}{isSelf ? text("（你）", " (You)") : ""}</strong>
         <small>{player.position === 0
           ? text("前排", "Frontline")
           : text(`第 ${player.position + 1} 位`, `Position ${player.position + 1}`)} · {player.maxHealth} HP</small>
@@ -229,7 +229,6 @@ export function OnlineLobby(props: OnlineLobbyProps) {
                 <span>{text("你的名字（必填，创建或加入房间都需要）", "Your name (required to create or join)")}</span>
                 <input
                   value={playerName}
-                  maxLength={8}
                   placeholder={text("请输入你的名字", "Enter your name")}
                   required
                   onChange={(event) => setPlayerName(event.target.value)}

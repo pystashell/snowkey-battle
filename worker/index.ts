@@ -99,8 +99,7 @@ function isCreateRoomRequest(value: unknown): value is CreateRoomRequest {
     value.reconnectToken.length <= 128 &&
     /^[A-Za-z0-9_-]+$/.test(value.reconnectToken) &&
     typeof value.name === "string" &&
-    value.name.trim().length > 0 &&
-    value.name.length <= 64
+    value.name.trim().length > 0
   );
 }
 

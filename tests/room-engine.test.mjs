@@ -158,6 +158,23 @@ test("supports SAT and TOEFL while retired situational books restore to the CET-
   assert.deepEqual(restored.serialize().state.recentFrostWords, []);
 });
 
+test("long human names survive joining, persistence and reconnect without prefix collisions", () => {
+  const prefix = "SnowballFighter".repeat(6);
+  const hostName = `${prefix}雪人☃️`;
+  const guestName = `${prefix}雪人❄️`;
+  const engine = createEngine({ name: hostName });
+  assert.equal(engine.snapshot(0, HOST_SESSION).players.find((player) => player.id === "pine-0").name, hostName);
+  const guest = { sessionId: "long-name-guest", reconnectToken: "guest-name-token", name: guestName };
+  assert.equal(engine.join({ ...guest, now: 1 }).ok, true);
+  const duplicate = engine.join({ ...guest, sessionId: "duplicate-name", name: guestName.toUpperCase(), now: 2 });
+  assert.equal(duplicate.code, "NAME_TAKEN");
+  const restored = RoomEngine.restore(engine.serialize());
+  const resumed = restored.join({ ...guest, now: 3 });
+  assert.equal(resumed.ok, true);
+  assert.equal(resumed.resumed, true);
+  assert.equal(resumed.snapshot.players.find((player) => player.id === resumed.playerId).name, guestName);
+});
+
 test("custom human names are unique while colliding AI names receive a distinct suffix", () => {
   const engine = createEngine({ name: "阿澄" });
   let snapshot = engine.snapshot(0, HOST_SESSION);
