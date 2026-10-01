@@ -44,6 +44,13 @@ Open `http://localhost:3000`. Local mode works immediately; the development serv
 
 The Cloudflare Worker is the referee. Clients only send lobby commands and keystrokes; the server owns snowflake spawning, typing races, queued throws, target locking, health, AI timing, reconnects, and victory. A disconnected human keeps their seat for 60 seconds before AI takes over. Rooms are retired after the final human leaves.
 
+Player names have no separate character-count limit in local or online mode.
+Online creation, joining, and reconnects preserve the full name after the existing
+whitespace/control-character cleanup. Names must still be nonempty and unique
+among human players. Narrow labels use an ellipsis and expose the full name on
+hover. The existing 2 KiB create-request and 4 KiB WebSocket-message limits still
+apply to the complete request, including credentials.
+
 ## Tech stack
 
 | Layer | Technology |

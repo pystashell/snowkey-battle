@@ -477,7 +477,7 @@ export function useRoomSocket(options: UseRoomSocketOptions = {}) {
   const joinRoom = useCallback((requestedRoomCode: string, requestedName: string) => {
     if (typeof window === "undefined") return false;
     const normalizedCode = sanitizeRoomCode(requestedRoomCode);
-    const playerName = requestedName.trim().slice(0, 8);
+    const playerName = requestedName.trim();
     if (!isRoomCode(normalizedCode)) {
       reportError({ code: "INVALID_ROOM_CODE", message: "房间码应为 6 位字母或数字。" }, true);
       return false;
@@ -503,7 +503,7 @@ export function useRoomSocket(options: UseRoomSocketOptions = {}) {
 
   const createRoom = useCallback(async (requestedName: string) => {
     if (typeof window === "undefined") return null;
-    const playerName = requestedName.trim().slice(0, 8);
+    const playerName = requestedName.trim();
     if (!playerName) {
       reportError({ code: "INVALID_NAME", message: "请先填写你的名字。" }, true);
       return null;

@@ -18,7 +18,6 @@ const ROOM_IDLE_TTL_MS = 6 * 60 * 60 * 1000;
 const JOIN_TIMEOUT_MS = 10 * 1000;
 const MAX_SOCKET_CONNECTIONS = 16;
 const MAX_CLIENT_MESSAGE_BYTES = 4 * 1024;
-const MAX_NAME_LENGTH = 8;
 const ADMISSION_KEY = "admission";
 const ADMISSION_TTL_MS = 10 * 60 * 1000;
 const COMMAND_BUDGETS_KEY = "command-budgets";
@@ -98,7 +97,7 @@ function isCredential(value: unknown, minimumLength: number, maximumLength: numb
 
 function normalizeName(value: unknown) {
   if (typeof value !== "string") return null;
-  const name = value.trim().replace(/\s+/g, " ").slice(0, MAX_NAME_LENGTH);
+  const name = value.trim().replace(/\s+/g, " ");
   return name.length > 0 ? name : null;
 }
 

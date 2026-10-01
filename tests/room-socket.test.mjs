@@ -76,6 +76,38 @@ async function mount(t, options = {}) {
   return { get room() { return room; }, socket, events, renderedEvents };
 }
 
+test("create requests and the initial socket join preserve the full player name", async (t) => {
+  const client = await mount(t);
+  const name = "SnowballFighter".repeat(6) + "雪人☃️";
+  let payload;
+  t.mock.method(globalThis, "fetch", async (_url, options) => {
+    payload = JSON.parse(options.body);
+    return new Response(JSON.stringify({ roomCode: "DEF234" }), { status: 201 });
+  });
+  await act(async () => { await client.room.createRoom(` ${name} `); });
+  assert.equal(payload.name, name);
+  const socket = Socket.instances.at(-1);
+  await act(() => socket.open());
+  assert.equal(socket.sent.find((message) => message.type === "join").name, name);
+});
+
+test("joining and reconnecting retain the full player name", async (t) => {
+  const client = await mount(t);
+  const name = "SnowballFighter".repeat(6) + "雪人❄️";
+  await act(() => { client.room.joinRoom("DEF234", ` ${name} `); });
+  const socket = Socket.instances.at(-1);
+  await act(() => {
+    socket.open();
+    socket.message({ type: "welcome", reconnectToken: "token", snapshot: { ...snapshot(), code: "DEF234" } });
+  });
+  assert.equal(socket.sent.find((message) => message.type === "join").name, name);
+  await act(() => { socket.disconnect(); t.mock.timers.tick(600); });
+  const next = Socket.instances.at(-1);
+  assert.notEqual(next, socket);
+  await act(() => next.open());
+  assert.equal(next.sent.find((message) => message.type === "join").name, name);
+});
+
 test("same-session reconnect retains sequence when storage throws", async (t) => {
   const client = await mount(t, { storageBlocked: true });
   for (let i = 0; i < 50; i++) client.room.sendCommand({ op: "type.key", key: "s" });

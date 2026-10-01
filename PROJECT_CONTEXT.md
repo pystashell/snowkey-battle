@@ -2,6 +2,34 @@
 
 Last handoff update: 2026-10-01
 
+## Player-name length limit removal (2026-10-01)
+
+Local and online name inputs no longer impose an eight-character limit. The
+socket hook, Durable Object, and authoritative engine preserve complete names,
+and room creation no longer has its separate 64-character name rejection.
+Existing whitespace/control-character cleanup, blank-name validation, full-name
+uniqueness, and the general 2 KiB create-body / 4 KiB socket-message bounds remain.
+The eight-character constant now applies only to generated AI collision suffixes.
+Compact labels use ellipsis with the full name in their title; character name
+tags have a bounded display width without truncating stored names.
+
+Five regression tests cover full-name create/join/reconnect, persistence and
+object reconstruction, names sharing a long prefix, duplicate rejection, and
+the existing blank-name/transport-size boundaries. Four new behavior cases
+failed against the previous implementation. The full suite passed 127 tests,
+typecheck, production build, and lint. At **http://127.0.0.1:3120**, a browser
+audit variant used two distinct 88-character names with an identical long prefix
+and Chinese/symbol suffixes. Both local and online inputs retained the names;
+two real browser contexts passed creation, joining, in-flight reload recovery,
+compact typing, a complete match, and rematch. Desktop/mobile lobby and mobile
+battle checks found no horizontal page overflow, and screenshots were inspected.
+There were no application errors beyond the known local favicon CSP warning.
+
+Evidence is under ignored `test-results/name-limit-*`; the browser variant also
+awaits asynchronous polling predicates. The local test server was stopped after
+validation. This name change has not been deployed; its base is the previously
+released `main` commit `b41289d`.
+
 ## PR #2 audit-script review follow-up (2026-10-01)
 
 The [latest review of PR #2](https://github.com/pystashell/snowkey-battle/pull/2#issuecomment-5924771419)

@@ -75,6 +75,55 @@ async function readyBurst(room, socket, first, count) {
   }
 }
 
+test("long names reach the room through HTTP creation, socket joins and object reconstruction", async () => {
+  const objects = new Map();
+  const env = { GAME_ROOMS: { getByName(name) {
+    return { fetch: async (request) => {
+      if (!objects.has(name)) objects.set(name, await instance());
+      return objects.get(name).room.fetch(request);
+    } };
+  } } };
+  const prefix = "SnowballFighter".repeat(6);
+  const host = { ...identity, name: `${prefix}雪人☃️` };
+  const created = await worker.fetch(new Request("https://game.test/api/rooms", {
+    method: "POST", headers: { Origin: "https://game.test" }, body: JSON.stringify(host),
+  }), env, {});
+  assert.equal(created.status, 201);
+  const { roomCode } = await created.json();
+  const harness = objects.get(roomCode);
+  const hostSocket = await reconnect(harness, host);
+  const hostSnapshot = hostSocket.sent.find((message) => message.type === "welcome").snapshot;
+  assert.equal(hostSnapshot.players.find((player) => player.id === hostSnapshot.selfPlayerId).name, host.name);
+  const guest = { sessionId: "guest-session", reconnectToken: "b".repeat(48), name: `${prefix}雪人❄️` };
+  const guestSocket = await reconnect(harness, guest);
+  const guestSnapshot = guestSocket.sent.find((message) => message.type === "welcome").snapshot;
+  assert.equal(guestSnapshot.players.find((player) => player.id === guestSnapshot.selfPlayerId).name, guest.name);
+  const restored = await instance(harness.storage);
+  const resumed = await reconnect(restored, guest);
+  const snapshot = resumed.sent.find((message) => message.type === "welcome").snapshot;
+  assert.equal(snapshot.selfPlayerId, guestSnapshot.selfPlayerId);
+  assert.equal(snapshot.players.find((player) => player.id === snapshot.selfPlayerId).name, guest.name);
+});
+
+test("name input still rejects blank names and oversized transport payloads", async () => {
+  const env = { GAME_ROOMS: { getByName(name) {
+    assert.match(name, /^admission:create:/, "invalid creation must not allocate a game room");
+    return { fetch: async () => new Response(null, { status: 200 }) };
+  } } };
+  for (const [name, expected] of [["  ", 400], ["雪".repeat(1000), 413]]) {
+    const response = await worker.fetch(new Request("https://game.test/api/rooms", {
+      method: "POST", body: JSON.stringify({ ...identity, name }),
+    }), env, {});
+    assert.equal(response.status, expected);
+  }
+  const harness = await joined();
+  const blank = await reconnect(harness, { ...identity, name: "  " });
+  assert.equal(blank.sent.at(-1).code, "JOIN_REQUIRED");
+  const oversized = await reconnect(harness, { ...identity, name: "雪".repeat(5000) });
+  assert.equal(oversized.sent.at(-1).code, "MESSAGE_TOO_LARGE");
+  assert.equal(oversized.closeCode, 4409);
+});
+
 test("runtime validator rejects malformed arguments for every command family", () => {
   for (const op of [
     { op: "presence.ready", ready: "true" }, { op: "lobby.set_team", team: "constructor" },
