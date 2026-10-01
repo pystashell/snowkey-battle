@@ -21,6 +21,7 @@ const MAX_CLIENT_MESSAGE_BYTES = 4 * 1024;
 const MAX_NAME_LENGTH = 8;
 const ADMISSION_KEY = "admission";
 const ADMISSION_TTL_MS = 10 * 60 * 1000;
+const COMMAND_BUDGETS_KEY = "command-budgets";
 const ROOM_ENGINE_OPTIONS = {
   wordbooks: {
     winter: WORD_BOOKS.winter.words,
@@ -75,6 +76,17 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+function isTokenBucket(value: unknown): value is TokenBucket {
+  return isRecord(value)
+    && typeof value.tokens === "number" && Number.isFinite(value.tokens)
+    && value.tokens >= 0 && value.tokens <= COMMAND_BUDGET.burst
+    && typeof value.updatedAt === "number" && Number.isFinite(value.updatedAt);
+}
+
+function commandBudgetFullAt(bucket: TokenBucket) {
+  return bucket.updatedAt + Math.ceil((COMMAND_BUDGET.burst - bucket.tokens) * 1000 / COMMAND_BUDGET.perSecond);
+}
+
 function isCredential(value: unknown, minimumLength: number, maximumLength: number) {
   return (
     typeof value === "string" &&
@@ -117,6 +129,7 @@ export class GameRoom {
   private lastActivityAt = 0;
   private lastSequenceBySession: Record<string, number> = {};
   private kickedSessionIds: string[] = [];
+  private commandBudgets = new Map<string, TokenBucket>();
 
   constructor(ctx: DurableObjectState, env: GameRoomEnv) {
     this.ctx = ctx;
@@ -131,6 +144,24 @@ export class GameRoom {
         this.lastActivityAt = stored.lastActivityAt;
         this.lastSequenceBySession = stored.lastSequenceBySession ?? {};
         this.kickedSessionIds = (stored.kickedSessionIds ?? []).filter((sessionId) => typeof sessionId === "string");
+        const budgets = await ctx.storage.get<Record<string, TokenBucket>>(COMMAND_BUDGETS_KEY);
+        if (budgets) {
+          for (const [sessionId, bucket] of Object.entries(budgets)) {
+            if (isCredential(sessionId, 8, 128) && isTokenBucket(bucket)) this.commandBudgets.set(sessionId, bucket);
+          }
+        } else {
+          // Upgrade an existing room without resetting its hibernating sockets.
+          for (const socket of ctx.getWebSockets()) {
+            const attachment = this.readAttachment(socket);
+            if (!attachment.joined || !attachment.sessionId || !attachment.commandBudget) continue;
+            const previous = this.commandBudgets.get(attachment.sessionId);
+            const bucket = attachment.commandBudget;
+            if (!previous || bucket.updatedAt > previous.updatedAt
+              || (bucket.updatedAt === previous.updatedAt && bucket.tokens < previous.tokens)) {
+              this.commandBudgets.set(attachment.sessionId, bucket);
+            }
+          }
+        }
         const now = Date.now();
         if (now >= this.lastActivityAt + ROOM_IDLE_TTL_MS) {
           await this.retireRoom(
@@ -160,6 +191,7 @@ export class GameRoom {
         this.lastActivityAt = 0;
         this.lastSequenceBySession = {};
         this.kickedSessionIds = [];
+        this.commandBudgets.clear();
         if ((await ctx.storage.getAlarm()) !== null) await ctx.storage.deleteAlarm();
         await ctx.storage.deleteAll();
       }
@@ -208,8 +240,7 @@ export class GameRoom {
     const attachment = this.readAttachment(socket);
     const budget = consumeToken(attachment.commandBudget, COMMAND_BUDGET, Date.now());
     if (!budget.allowed) {
-      this.sendError(socket, "RATE_LIMITED", "Too many commands. Please reconnect shortly.");
-      this.closeSocket(socket, 4429, "Command rate exceeded");
+      this.rejectCommandFlood(socket);
       return;
     }
     attachment.commandBudget = budget.bucket;
@@ -250,6 +281,17 @@ export class GameRoom {
       return;
     }
 
+    // The socket gate also bounds malformed frames. Only validated commands
+    // from joined sessions reach this durable, cross-connection budget.
+    if (attachment.sessionId) {
+      const sessionBudget = consumeToken(this.commandBudgets.get(attachment.sessionId), COMMAND_BUDGET, Date.now());
+      if (!sessionBudget.allowed) {
+        this.rejectCommandFlood(socket);
+        return;
+      }
+      this.commandBudgets.set(attachment.sessionId, sessionBudget.bucket);
+    }
+
     await this.handleCommand(socket, attachment, parsed);
   }
 
@@ -279,6 +321,15 @@ export class GameRoom {
 
     if (now >= this.lastActivityAt + ROOM_IDLE_TTL_MS) {
       await this.retireRoom("ROOM_EXPIRED", "This room expired after being idle.", "Room expired");
+      return;
+    }
+
+    const nextRoomTask = this.engine.nextDueAt();
+    if ((nextRoomTask === null || nextRoomTask > now)
+      && [...this.commandBudgets.values()].some((bucket) => now >= commandBudgetFullAt(bucket))) {
+      // A budget-expiry alarm must not turn cheap pings into full-room writes
+      // and fan-out. Keep any pending battle/disconnect deadline scheduled.
+      await this.persistCommandBudgets();
       return;
     }
 
@@ -369,6 +420,13 @@ export class GameRoom {
     }
 
     const now = Date.now();
+    const budget = consumeToken(this.commandBudgets.get(message.sessionId), COMMAND_BUDGET, now);
+    if (!budget.allowed) {
+      // Refuse before engine.join can change membership, persist or broadcast.
+      // Do not charge a claimed session until its credentials are accepted.
+      this.rejectCommandFlood(socket);
+      return;
+    }
     const result = this.engine.join({
       sessionId: message.sessionId,
       reconnectToken: message.reconnectToken,
@@ -397,6 +455,8 @@ export class GameRoom {
       this.closeSocket(socket, 4403, "Join rejected");
       return;
     }
+
+    this.commandBudgets.set(message.sessionId, budget.bucket);
 
     for (const existingSocket of this.ctx.getWebSockets()) {
       if (existingSocket === socket) continue;
@@ -443,6 +503,7 @@ export class GameRoom {
 
     const durableLastSequence = this.lastSequenceBySession[attachment.sessionId] ?? -1;
     if (message.sequence <= Math.max(attachment.lastSequence, durableLastSequence)) {
+      await this.persistCommandBudgets();
       const snapshot = this.engine.snapshot(Date.now(), attachment.sessionId);
       this.safeSend(socket, {
         v: GAME_PROTOCOL_VERSION,
@@ -460,6 +521,7 @@ export class GameRoom {
     if (message.command.op === "ping") {
       attachment.lastSequence = message.sequence;
       socket.serializeAttachment(attachment);
+      await this.persistCommandBudgets();
       this.safeSend(socket, { v: GAME_PROTOCOL_VERSION, type: "pong", serverTime: now });
       this.acknowledge(socket, message, this.engine.snapshot(now, attachment.sessionId).revision);
       return;
@@ -468,6 +530,7 @@ export class GameRoom {
     if (message.command.op === "sync.request") {
       attachment.lastSequence = message.sequence;
       socket.serializeAttachment(attachment);
+      await this.persistCommandBudgets();
       this.safeSend(socket, {
         v: GAME_PROTOCOL_VERSION,
         type: "snapshot",
@@ -596,6 +659,7 @@ export class GameRoom {
     this.lastActivityAt = 0;
     this.lastSequenceBySession = {};
     this.kickedSessionIds = [];
+    this.commandBudgets.clear();
 
     for (const socket of this.ctx.getWebSockets()) {
       this.sendError(socket, errorCode, message);
@@ -612,6 +676,7 @@ export class GameRoom {
 
   private async persist(): Promise<void> {
     if (!this.engine) return;
+    this.pruneCommandBudgets();
     const stored: StoredRoom = {
       schemaVersion: STORED_ROOM_SCHEMA_VERSION,
       engine: this.engine.serialize(),
@@ -619,7 +684,28 @@ export class GameRoom {
       lastSequenceBySession: this.lastSequenceBySession,
       kickedSessionIds: this.kickedSessionIds,
     };
-    await this.ctx.storage.put(STORED_ROOM_KEY, stored);
+    // One atomic batch keeps the charged budget and acknowledged room state
+    // consistent. Read-only commands store only the small budget map below.
+    await this.ctx.storage.put<StoredRoom | Record<string, TokenBucket>>({
+      [STORED_ROOM_KEY]: stored,
+      [COMMAND_BUDGETS_KEY]: Object.fromEntries(this.commandBudgets),
+    });
+  }
+
+  private async persistCommandBudgets(): Promise<void> {
+    if (!this.engine || this.retiring) return;
+    this.pruneCommandBudgets();
+    await this.ctx.storage.put(COMMAND_BUDGETS_KEY, Object.fromEntries(this.commandBudgets));
+    await this.scheduleNextAlarm();
+  }
+
+  private pruneCommandBudgets() {
+    const now = Date.now();
+    for (const [sessionId, bucket] of this.commandBudgets) {
+      // Forgetting a fully refilled bucket is equivalent to keeping it. Retain
+      // spent credit after leave/kick until then, so leaving cannot reset it.
+      if (now >= commandBudgetFullAt(bucket)) this.commandBudgets.delete(sessionId);
+    }
   }
 
   private async scheduleNextAlarm(): Promise<void> {
@@ -639,7 +725,11 @@ export class GameRoom {
         ? earliest
         : Math.min(earliest, attachment.connectedAt + JOIN_TIMEOUT_MS);
     }, Number.POSITIVE_INFINITY);
-    const nextAt = Math.min(dueAt ?? Number.POSITIVE_INFINITY, expiryAt, pendingJoinAt);
+    let budgetExpiryAt = Number.POSITIVE_INFINITY;
+    for (const bucket of this.commandBudgets.values()) {
+      budgetExpiryAt = Math.min(budgetExpiryAt, commandBudgetFullAt(bucket));
+    }
+    const nextAt = Math.min(dueAt ?? Number.POSITIVE_INFINITY, expiryAt, pendingJoinAt, budgetExpiryAt);
     if (!Number.isFinite(nextAt)) {
       if ((await this.ctx.storage.getAlarm()) !== null) await this.ctx.storage.deleteAlarm();
       return;
@@ -726,6 +816,11 @@ export class GameRoom {
     this.safeSend(socket, payload);
   }
 
+  private rejectCommandFlood(socket: WebSocket) {
+    this.sendError(socket, "RATE_LIMITED", "Too many commands. Please wait before reconnecting.");
+    this.closeSocket(socket, 4429, "Command rate exceeded");
+  }
+
   private closeKickedSession(sessionId: string) {
     for (const socket of this.ctx.getWebSockets()) {
       const attachment = this.readAttachment(socket);
@@ -763,9 +858,7 @@ export class GameRoom {
       joined: value.joined === true,
       sessionId: typeof value.sessionId === "string" ? value.sessionId : null,
       lastSequence: Number.isSafeInteger(value.lastSequence) ? Number(value.lastSequence) : -1,
-      commandBudget: isRecord(value.commandBudget)
-        && typeof value.commandBudget.tokens === "number" && Number.isFinite(value.commandBudget.tokens)
-        && typeof value.commandBudget.updatedAt === "number" && Number.isFinite(value.commandBudget.updatedAt)
+      commandBudget: isTokenBucket(value.commandBudget)
         ? { tokens: value.commandBudget.tokens, updatedAt: value.commandBudget.updatedAt }
         : undefined,
       connectedAt:

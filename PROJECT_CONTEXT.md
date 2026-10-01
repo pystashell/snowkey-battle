@@ -2,6 +2,101 @@
 
 Last handoff update: 2026-10-01
 
+## PR #2 audit-script review follow-up (2026-10-01)
+
+The [latest review of PR #2](https://github.com/pystashell/snowkey-battle/pull/2#issuecomment-5924771419)
+confirmed the session-budget repair and identified a browser-audit race: the
+server could finish a match between the enabled check and `fill`, leaving the
+script waiting 30 seconds on a disabled input. Three deterministic regressions
+failed against the original loop. The helper now rechecks the authoritative
+phase after awaited input operations and bounds those operations to 1.5 seconds.
+Only a timeout accompanied by an `ended` snapshot is tolerated. Both players'
+result assertions and the complete rematch audit still run; unrelated errors and
+timeouts while playing remain failures.
+
+The live rate-limit audit now saves diagnostics on success, failure, and
+inconclusive runs, including the stage, elapsed time, total debits, and partial
+connection observations. Each run has a unique JSON artifact, so updating the
+convenience latest file cannot erase earlier attempts. Failed/inconclusive runs
+still exit nonzero; the two-second cutoff and token bounds are unchanged. A
+controlled HTTP/WebSocket fixture runs the actual CLI past that cutoff and
+checks its saved diagnostics and nonzero exit. This fixture tests the audit
+tool, not the authoritative GameRoom implementation.
+
+Validation in this checkout: all 122 tests, typecheck, production build, and
+lint passed, including nine audit-tool regressions. Two consecutive browser
+audits against **http://127.0.0.1:3120** each passed with two isolated Chromium
+contexts, identical match results, and a successful rematch. There were no
+application errors, only the existing local-preview favicon CSP warning. On
+the same idle local server, the live rate-limit audit passed on its first run:
+95 and 2 accepted commands plus two joins consumed 99 tokens over 729 ms,
+below the time-based bound of 102. Refill/watermark recovery and HTTP 429
+admission also passed. The previous gameplay/reclamation `test:live` result
+below was not rerun for this audit-script-only change.
+
+Evidence is preserved under ignored `test-results/pr2-followup-*`,
+`pr2-audit-tools-before.log`, `pr2-audit-tools-after.log`, and the unique
+`session-budget-live-*.json` files. The independent reviewer's original browser
+failure and prior evidence remain available. The local server was stopped after
+validation. No application, shared protocol, Worker, or deployment configuration
+changed in this follow-up, and no production deployment was performed.
+
+## Session command budget review follow-up (2026-10-01)
+
+The [post-merge review of PR #1](https://github.com/pystashell/snowkey-battle/pull/1#issuecomment-5921522751)
+identified a P2 gap in the per-socket command budget. The reviewed tree matches
+`main` at `57e5cd3`. A fixed-clock reproduction accepted 79 commands and made 79
+room writes on each of two connections using the same credentials, without
+waiting for refill. The second connection now receives `RATE_LIMITED` before
+changing membership, writing storage, or broadcasting.
+
+The room now owns a durable session budget in addition to the existing socket
+gate. Successful joins and validated commands debit the same 80-token bucket
+with 30/second refill across socket replacement and object reconstruction.
+Failed authentication does not charge a claimed session; malformed frames are
+still rejected before storage work. Pings, sync requests, and duplicate sequences
+also debit the session bucket. The command protocol and battle rules are unchanged.
+
+Storage and lifecycle details:
+
+- `command-budgets` lives in the room's existing Durable Object. Mutations save
+  the room and budget map together in one atomic, two-key storage batch.
+  Read-only commands save only the small map; a storage-call count is not a
+  physical-write or billing measurement.
+- Remaining budget persists after leave/kick until it naturally refills, so
+  immediately leaving and rejoining cannot reset it. Fully refilled records are
+  removed by the room alarm (at most 2.667 seconds after the last debit); a
+  budget-only cleanup does not write or broadcast the full room. Room retirement
+  deletes all budgets. No new namespace or migration is needed.
+- Existing stored rooms without the new key recover budgets from their joined
+  hibernating socket attachments. Runtime tests cover reconstruction without an
+  old socket, exact refill, concurrent reconnects, credential isolation, cleanup,
+  and Worker admission routing. The routing harness substitutes storage/socket
+  I/O and is distinct from the live network test below.
+
+Validation in the canonical workspace: `npm test` passed 113 tests, typecheck,
+and production build; lint passed. At **http://127.0.0.1:3118**, `test:live`
+passed gameplay, host transfer, kick/credential rejection, and abrupt-disconnect
+reclamation after about 68 seconds. Two isolated Chromium contexts passed the
+full browser audit including reload during a throw and rematch. One browser run
+exposed a test race: it checked the compact-keyboard toggle before resize-driven
+React state had rendered. The script now waits for mobile controls; its rerun
+passed with no application errors and the existing favicon CSP warning only.
+
+`test:live:rate-limit` exercised actual Worker upgrades and WebSockets: the first
+connection accepted 97 commands while refilling, the immediate replacement
+accepted 1, and total consumption including both joins was 100 tokens over
+789 ms, below the time-based upper bound of 104. Refill preserved the processed
+sequence and player identity, and repeated upgrades eventually returned HTTP
+429 from address admission. This is local correctness evidence, not production
+load/cost validation. The dedicated test refuses to draw a reset conclusion if
+its rapid-reconnect window exceeds two seconds.
+
+Evidence is under ignored `test-results/session-budget-*` plus
+`test-results/audit-browser.json`. The local validation server was stopped after
+testing so it does not hold build output open for the next reviewer. No production
+deployment was performed.
+
 ## Follow-up review evidence checked on 2026-10-01 (Asia/Shanghai)
 
 The supplied `snowkey-review-evidence.zip` (SHA-256
